@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/selyafi/diffsmith/internal/model"
 	"github.com/selyafi/diffsmith/internal/provider"
 )
 
@@ -25,7 +26,8 @@ func newReviewCmd(registry *provider.Registry) *cobra.Command {
 		Short: "Draft review comments for a GitHub PR or GitLab MR",
 		Long: "Fetch the diff for the given PR/MR, run the selected model CLI, validate the\n" +
 			"findings against the diff, and open the review TUI. The model-call path lands\n" +
-			"in M3; for now --print-prompt is the supported end-to-end smoke test.",
+			"in M3b; for now --print-prompt and --dry-run are the supported end-to-end\n" +
+			"smoke tests.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReview(cmd, args, flags, registry)
@@ -61,38 +63,12 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 
 	switch {
 	case flags.printPrompt:
-		return writeStubPrompt(cmd.OutOrStdout(), input)
+		_, err := io.WriteString(cmd.OutOrStdout(), model.BuildPrompt(input))
+		return err
 	case flags.dryRun:
 		fmt.Fprintf(cmd.OutOrStdout(), "fetched %d file(s) from %s (model call skipped: --dry-run)\n", len(input.Files), input.Target.URL)
 		return nil
 	default:
-		return errors.New("model invocation lands in M3 (Codex adapter). Try --print-prompt or --dry-run")
+		return errors.New("model invocation lands in M3b (Codex adapter). Try --print-prompt or --dry-run")
 	}
-}
-
-// writeStubPrompt produces a M2-shaped summary of the fetch result. The
-// final structured prompt (per docs/prompt-contract.md) is M3 work; this
-// is the smoke-test artifact that proves the GitHub + diff-parser pipeline
-// works end-to-end.
-func writeStubPrompt(w io.Writer, input *provider.ReviewInput) error {
-	fmt.Fprintln(w, "# Review Target")
-	fmt.Fprintf(w, "URL: %s\n", input.Target.URL)
-	fmt.Fprintf(w, "Title: %s\n", input.Title)
-	fmt.Fprintf(w, "Author: %s\n", input.Author)
-	if input.Target.HeadRef != "" || input.Target.BaseRef != "" {
-		fmt.Fprintf(w, "Branch: %s -> %s\n", input.Target.HeadRef, input.Target.BaseRef)
-	}
-	fmt.Fprintln(w)
-
-	fmt.Fprintf(w, "# Files (%d)\n", len(input.Files))
-	for _, f := range input.Files {
-		fmt.Fprintf(w, "- %s (%s, %d hunk(s))\n", f.Path, f.Kind, len(f.Hunks))
-	}
-	fmt.Fprintln(w)
-
-	fmt.Fprintln(w, "# Diff")
-	if _, err := io.WriteString(w, input.RawDiff); err != nil {
-		return err
-	}
-	return nil
 }
