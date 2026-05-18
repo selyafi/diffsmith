@@ -3,6 +3,9 @@ package app
 
 import (
 	"github.com/spf13/cobra"
+
+	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/provider/githubgh"
 )
 
 func newRootCmd() *cobra.Command {
@@ -14,8 +17,15 @@ func newRootCmd() *cobra.Command {
 			"you inspect, edit, approve, dismiss, and copy comments. Diffsmith never posts.",
 		SilenceUsage: true,
 	}
-	root.AddCommand(newReviewCmd())
+	root.AddCommand(newReviewCmd(defaultRegistry()))
 	return root
+}
+
+// defaultRegistry returns the provider registry wired to real CLIs. Tests
+// build their own registry with stub providers and pass it to
+// newReviewCmd directly.
+func defaultRegistry() *provider.Registry {
+	return provider.NewRegistry(githubgh.New(nil))
 }
 
 // Execute parses argv and runs the matching command.
