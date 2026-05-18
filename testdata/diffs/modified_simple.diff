@@ -1,0 +1,13 @@
+diff --git a/auth/session.go b/auth/session.go
+index abc1234..def5678 100644
+--- a/auth/session.go
++++ b/auth/session.go
+@@ -10,7 +10,7 @@ func ValidateToken(t string) bool {
+ 	if t == "" {
+ 		return false
+ 	}
+-	parts := strings.Split(t, ".")
++	parts := strings.SplitN(t, ".", 3)
+ 	if len(parts) != 3 {
+ 		return false
+ 	}

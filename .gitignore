@@ -17,6 +17,9 @@
 # Claude Code per-user permission grants
 .claude/*.local.json
 
+# Agent/tooling guidance for this machine only (bd workflow)
+AGENTS.md
+
 # Test artifacts
 coverage.out
 coverage.html

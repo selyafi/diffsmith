@@ -1,0 +1,15 @@
+diff --git a/handler/old_name.go b/handler/new_name.go
+similarity index 70%
+rename from handler/old_name.go
+rename to handler/new_name.go
+index abc1234..def5678 100644
+--- a/handler/old_name.go
++++ b/handler/new_name.go
+@@ -1,5 +1,5 @@
+ package handler
+ 
+-func Handle() string {
+-	return "old"
++func Process() string {
++	return "new"
+ }

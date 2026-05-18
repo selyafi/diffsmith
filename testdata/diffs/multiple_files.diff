@@ -1,0 +1,18 @@
+diff --git a/a/first.go b/a/first.go
+index abc1234..def5678 100644
+--- a/a/first.go
++++ b/a/first.go
+@@ -1,3 +1,3 @@
+ package a
+ 
+-var X = 1
++var X = 2
+diff --git a/b/second.go b/b/second.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/b/second.go
+@@ -0,0 +1,3 @@
++package b
++
++const Y = "hello"

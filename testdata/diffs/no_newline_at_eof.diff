@@ -1,0 +1,11 @@
+diff --git a/text/note.txt b/text/note.txt
+index abc1234..def5678 100644
+--- a/text/note.txt
++++ b/text/note.txt
+@@ -1,3 +1,3 @@
+ line one
+ line two
+-line three
+\ No newline at end of file
++line three updated
+\ No newline at end of file

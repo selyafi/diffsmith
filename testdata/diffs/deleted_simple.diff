@@ -1,0 +1,10 @@
+diff --git a/legacy/old.go b/legacy/old.go
+deleted file mode 100644
+index 1234567..0000000
+--- a/legacy/old.go
++++ /dev/null
+@@ -1,4 +0,0 @@
+-package legacy
+-
+-// Old is the legacy entrypoint.
+-func Old() {}
