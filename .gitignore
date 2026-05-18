@@ -1,0 +1,22 @@
+# Build outputs
+/bin/
+/dist/
+/diffsmith
+*.test
+*.out
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Beads — local-only issue tracker; never committed or pushed
+.beads/
+
+# Claude Code per-user permission grants
+.claude/*.local.json
+
+# Test artifacts
+coverage.out
+coverage.html
