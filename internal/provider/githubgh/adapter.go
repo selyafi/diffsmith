@@ -55,7 +55,7 @@ func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*provider.ReviewInp
 		return nil, err
 	}
 
-	rawDiff, err := a.run(ctx, "gh", "pr", "diff", ref.URL, "--patch", "--color", "never")
+	rawDiff, err := a.run(ctx, nil, "gh", "pr", "diff", ref.URL, "--patch", "--color", "never")
 	if err != nil {
 		return nil, fmt.Errorf("gh pr diff: %w", err)
 	}
@@ -94,7 +94,7 @@ type ghMetadata struct {
 }
 
 func (a *Adapter) fetchMetadata(ctx context.Context, prURL string) (*ghMetadata, error) {
-	out, err := a.run(ctx, "gh", "pr", "view", prURL, "--json", "title,author,headRefName,baseRefName,url")
+	out, err := a.run(ctx, nil, "gh", "pr", "view", prURL, "--json", "title,author,headRefName,baseRefName,url")
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view: %w", err)
 	}

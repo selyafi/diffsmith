@@ -3,6 +3,7 @@ package githubgh
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,7 +27,7 @@ func scriptedRunner(t *testing.T, responses [][]byte) (provider.Runner, *[]recor
 	t.Helper()
 	var calls []recordedCall
 	i := 0
-	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+	run := func(_ context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
 		calls = append(calls, recordedCall{name: name, args: append([]string(nil), args...)})
 		if i >= len(responses) {
 			t.Fatalf("unexpected call #%d: %s %v", i+1, name, args)
@@ -111,7 +112,7 @@ func TestAdapterFetchHappyPath(t *testing.T) {
 }
 
 func TestAdapterFetchRejectsNonGitHubURL(t *testing.T) {
-	run := func(context.Context, string, ...string) ([]byte, error) {
+	run := func(context.Context, io.Reader, string, ...string) ([]byte, error) {
 		t.Fatal("runner should not be invoked when URL parsing fails")
 		return nil, nil
 	}
@@ -124,7 +125,7 @@ func TestAdapterFetchRejectsNonGitHubURL(t *testing.T) {
 }
 
 func TestAdapterFetchSurfacesRunnerError(t *testing.T) {
-	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+	run := func(_ context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
 		return nil, errors.New("gh: exit 4: not authenticated")
 	}
 	a := New(provider.Runner(run))

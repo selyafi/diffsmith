@@ -3,13 +3,14 @@ package githubgh
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
 
 func TestPreflightMissingBinary(t *testing.T) {
 	p := NewPreflight(
-		func(context.Context, string, ...string) ([]byte, error) {
+		func(context.Context, io.Reader, string, ...string) ([]byte, error) {
 			t.Fatal("runner should not be invoked when gh is missing")
 			return nil, nil
 		},
@@ -26,7 +27,7 @@ func TestPreflightMissingBinary(t *testing.T) {
 
 func TestPreflightAuthFailure(t *testing.T) {
 	p := NewPreflight(
-		func(context.Context, string, ...string) ([]byte, error) {
+		func(context.Context, io.Reader, string, ...string) ([]byte, error) {
 			return nil, errors.New("gh: exit 1: not logged in")
 		},
 		func(string) (string, error) { return "/usr/local/bin/gh", nil },
@@ -41,7 +42,7 @@ func TestPreflightAuthFailure(t *testing.T) {
 func TestPreflightHappyPath(t *testing.T) {
 	called := false
 	p := NewPreflight(
-		func(_ context.Context, name string, args ...string) ([]byte, error) {
+		func(_ context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
 			called = true
 			if name != "gh" || len(args) < 2 || args[0] != "auth" || args[1] != "status" {
 				t.Errorf("unexpected call: %s %v", name, args)

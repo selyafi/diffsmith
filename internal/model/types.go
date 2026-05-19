@@ -40,7 +40,12 @@ type ModelReviewResult struct {
 }
 
 // Model adapters produce normalized review findings for one CLI family.
+//
+// Callers must invoke Preflight before Review so the user sees an
+// actionable error if the CLI is missing, rather than a stack trace
+// from os/exec.
 type Model interface {
 	Name() string
+	Preflight(ctx context.Context) error
 	Review(ctx context.Context, input *provider.ReviewInput) (*ModelReviewResult, error)
 }

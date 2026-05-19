@@ -37,7 +37,7 @@ func (p *Preflight) Check(ctx context.Context) error {
 	if _, err := p.LookPath("gh"); err != nil {
 		return errors.New("gh CLI not found on PATH. Install it from https://cli.github.com/")
 	}
-	if _, err := p.Run(ctx, "gh", "auth", "status"); err != nil {
+	if _, err := p.Run(ctx, nil, "gh", "auth", "status"); err != nil {
 		return fmt.Errorf("gh is not authenticated: %w. Run `gh auth login` to authenticate", err)
 	}
 	return nil

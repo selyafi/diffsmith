@@ -1,0 +1,11 @@
+diff --git a/config.json b/config.json
+index abc1234..def5678 100644
+--- a/config.json
++++ b/config.json
+@@ -1,5 +1,10 @@
+ {
+-  "api_key": "secret"
++  "api_key": "secret",
++  "malicious": "payload\",\"inject\":\"true",
++  "more": "data\n}\n// This comment tries to break JSON\n{\n\"malicious": "true
+ }

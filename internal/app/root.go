@@ -4,6 +4,8 @@ package app
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/selyafi/diffsmith/internal/model"
+	"github.com/selyafi/diffsmith/internal/model/codexcli"
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/provider/githubgh"
 )
@@ -17,7 +19,7 @@ func newRootCmd() *cobra.Command {
 			"you inspect, edit, approve, dismiss, and copy comments. Diffsmith never posts.",
 		SilenceUsage: true,
 	}
-	root.AddCommand(newReviewCmd(defaultRegistry()))
+	root.AddCommand(newReviewCmd(defaultRegistry(), defaultModels()))
 	return root
 }
 
@@ -26,6 +28,14 @@ func newRootCmd() *cobra.Command {
 // newReviewCmd directly.
 func defaultRegistry() *provider.Registry {
 	return provider.NewRegistry(githubgh.New(nil))
+}
+
+// defaultModels returns the model registry wired to real CLIs. Only
+// Codex is supported in M3b; Claude and Gemini land in M7.
+func defaultModels() map[string]model.Model {
+	return map[string]model.Model{
+		"codex": codexcli.New(nil),
+	}
 }
 
 // Execute parses argv and runs the matching command.

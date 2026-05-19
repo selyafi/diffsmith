@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -15,13 +16,19 @@ import (
 // implementing an interface. Real implementations should use argv form
 // (variadic args) — passing user-controlled values through `sh -c` is
 // forbidden by docs/architecture.md § Process Execution.
-type Runner func(ctx context.Context, name string, args ...string) ([]byte, error)
+//
+// Pass stdin as nil when the command takes no input. Adapters that pipe
+// data to the child (e.g. codex via ADR 0007) provide a Reader here.
+type Runner func(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error)
 
 // DefaultRunner runs the command via os/exec and returns stdout. On a
 // non-zero exit it returns an error including the exit code and a trimmed
 // copy of stderr.
-func DefaultRunner(ctx context.Context, name string, args ...string) ([]byte, error) {
+func DefaultRunner(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

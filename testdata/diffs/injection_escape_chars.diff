@@ -1,0 +1,14 @@
+diff --git a/string.go b/string.go
+index abc1234..def5678 100644
+--- a/string.go
++++ b/string.go
+@@ -5,7 +5,9 @@ func Process(s string) {
+ 	if s == "" {
+ 		return
+ 	}
+-	clean := strings.Replace(s, "\"", "'", -1)
++	// Try to break the validator with backslashes and quotes
++	clean := strings.Replace(s, "\\", "/", -1)
++	clean = strings.Replace(clean, "\"", "\\'\\\"\\\\", -1)
+ 	fmt.Println(clean)
+ }
