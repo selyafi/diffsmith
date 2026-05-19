@@ -6,11 +6,7 @@
 // a reason rather than guessed at, per the v1 schema contract.
 package review
 
-import (
-	"fmt"
-
-	"github.com/selyafi/diffsmith/internal/model"
-)
+import "fmt"
 
 // Severity enumerates the four severity buckets v1 supports.
 type Severity int
@@ -85,6 +81,6 @@ type Finding struct {
 // Quarantined holds a finding that failed validation, with the reason
 // preserved so the TUI's debug surface can explain why.
 type Quarantined struct {
-	Candidate model.FindingCandidate
+	Candidate FindingCandidate
 	Reason    string
 }

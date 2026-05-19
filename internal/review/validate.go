@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/selyafi/diffsmith/internal/diff"
-	"github.com/selyafi/diffsmith/internal/model"
 )
 
 // Validate converts model candidates into validated Findings, enforcing
@@ -13,7 +12,7 @@ import (
 // Each candidate is evaluated independently; both the accepted Findings
 // and the Quarantined slice are returned so the TUI can show debug-only
 // rejected items without dropping them on the floor.
-func Validate(candidates []model.FindingCandidate, modelName string, idx *diff.Index) ([]Finding, []Quarantined) {
+func Validate(candidates []FindingCandidate, modelName string, idx *diff.Index) ([]Finding, []Quarantined) {
 	var ok []Finding
 	var bad []Quarantined
 
@@ -31,7 +30,7 @@ func Validate(candidates []model.FindingCandidate, modelName string, idx *diff.I
 // validateOne returns a Finding on success or an empty Finding + non-empty
 // reason on failure. Order matters: cheap field checks first, line
 // classification last (it requires diff lookups).
-func validateOne(c model.FindingCandidate, modelName string, idx *diff.Index) (Finding, string) {
+func validateOne(c FindingCandidate, modelName string, idx *diff.Index) (Finding, string) {
 	if c.File == "" {
 		return Finding{}, "file is empty"
 	}

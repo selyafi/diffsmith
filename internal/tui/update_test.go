@@ -79,6 +79,31 @@ func TestUpdateQuitOnCtrlC(t *testing.T) {
 	}
 }
 
+// TestUpdateCopyOnC verifies pressing 'c' copies the current finding's
+// SuggestedComment via the injectable copyToClipboard seam.
+func TestUpdateCopyOnC(t *testing.T) {
+	var captured string
+	prev := copyToClipboard
+	copyToClipboard = func(s string) error {
+		captured = s
+		return nil
+	}
+	t.Cleanup(func() { copyToClipboard = prev })
+
+	m := NewModel([]review.Finding{
+		{
+			File: "a.go", Line: 1, Severity: review.SeverityHigh,
+			Title: "T", SuggestedComment: "Fix this leak", Model: "test", Confidence: 0.5,
+		},
+	})
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	if captured != "Fix this leak" {
+		t.Errorf("'c' should copy current finding's SuggestedComment; got %q", captured)
+	}
+}
+
 // TestUpdateUpArrowMovesSelection verifies the up arrow retreats the cursor.
 func TestUpdateUpArrowMovesSelection(t *testing.T) {
 	m := NewModel([]review.Finding{

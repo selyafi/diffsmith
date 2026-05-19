@@ -13,6 +13,7 @@ import (
 
 	"github.com/selyafi/diffsmith/internal/model"
 	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/review"
 )
 
 //go:embed schema.json
@@ -59,7 +60,7 @@ func (a *Adapter) Preflight(_ context.Context) error {
 // Review invokes codex with an --output-schema path. Stdin piping,
 // schema temp-file writing, and output parsing are added by subsequent
 // TDD cycles as their tests drive them.
-func (a *Adapter) Review(ctx context.Context, input *provider.ReviewInput) (*model.ModelReviewResult, error) {
+func (a *Adapter) Review(ctx context.Context, input *review.ReviewInput) (*review.ModelReviewResult, error) {
 	prompt := model.BuildPrompt(input)
 	if len(prompt) > DefaultInputBudgetBytes {
 		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR or filter files",
@@ -80,7 +81,7 @@ func (a *Adapter) Review(ctx context.Context, input *provider.ReviewInput) (*mod
 	if err != nil {
 		return nil, fmt.Errorf("codex output: %w", err)
 	}
-	return &model.ModelReviewResult{
+	return &review.ModelReviewResult{
 		Model:     a.Name(),
 		Findings:  findings,
 		RawOutput: string(out),

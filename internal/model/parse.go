@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/selyafi/diffsmith/internal/review"
 )
 
 // ParseError describes why a model's stdout couldn't be parsed.
@@ -24,12 +26,12 @@ func (e *ParseError) Error() string {
 
 func (e *ParseError) Unwrap() error { return e.Cause }
 
-// ParseFindings turns raw model stdout into FindingCandidate values.
+// ParseFindings turns raw model stdout into review.FindingCandidate values.
 //
 // The contract from docs/prompt-contract.md is strict: JSON only, no
 // markdown fences, no prose preamble. Violations return *ParseError so
 // callers can surface a categorized message instead of a stack trace.
-func ParseFindings(raw []byte) ([]FindingCandidate, error) {
+func ParseFindings(raw []byte) ([]review.FindingCandidate, error) {
 	trimmed := strings.TrimSpace(string(raw))
 
 	if strings.HasPrefix(trimmed, "```") {
@@ -40,7 +42,7 @@ func ParseFindings(raw []byte) ([]FindingCandidate, error) {
 	}
 
 	var envelope struct {
-		Findings []FindingCandidate `json:"findings"`
+		Findings []review.FindingCandidate `json:"findings"`
 	}
 	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
 		return nil, &ParseError{

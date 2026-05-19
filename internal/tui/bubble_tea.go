@@ -1,6 +1,14 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/selyafi/diffsmith/internal/clipboard"
+)
+
+// copyToClipboard is the seam between Update and the OS clipboard. Tests
+// swap it to capture the copied text without touching the real clipboard.
+var copyToClipboard = clipboard.Copy
 
 // Run launches the interactive Bubble Tea program for the given model and
 // blocks until the user quits. The model is mutated in place; callers read
@@ -27,6 +35,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ApproveCurrent()
 		case "d":
 			m.DismissCurrent()
+		case "c":
+			if cur := m.CurrentFinding(); cur != nil {
+				_ = copyToClipboard(cur.SuggestedComment)
+			}
 		}
 	}
 	return m, nil

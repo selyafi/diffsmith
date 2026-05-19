@@ -12,6 +12,7 @@ import (
 	"github.com/selyafi/diffsmith/internal/diff"
 	"github.com/selyafi/diffsmith/internal/model"
 	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/review"
 	"github.com/selyafi/diffsmith/internal/tui"
 )
 
@@ -30,7 +31,7 @@ func withFakeTUI(t *testing.T, fake func(*tui.Model) error) {
 type stubProvider struct {
 	supports     func(string) bool
 	preflightErr error
-	fetchInput   *provider.ReviewInput
+	fetchInput   *review.ReviewInput
 	fetchErr     error
 	preflightHit bool
 	fetchHit     bool
@@ -39,7 +40,7 @@ type stubProvider struct {
 type stubModel struct {
 	name         string
 	preflightErr error
-	reviewResult *model.ModelReviewResult
+	reviewResult *review.ModelReviewResult
 	reviewErr    error
 	preflightHit bool
 	reviewHit    bool
@@ -52,7 +53,7 @@ func (m *stubModel) Preflight(context.Context) error {
 	return m.preflightErr
 }
 
-func (m *stubModel) Review(context.Context, *provider.ReviewInput) (*model.ModelReviewResult, error) {
+func (m *stubModel) Review(context.Context, *review.ReviewInput) (*review.ModelReviewResult, error) {
 	m.reviewHit = true
 	return m.reviewResult, m.reviewErr
 }
@@ -64,7 +65,7 @@ func (s *stubProvider) Preflight(context.Context) error {
 	return s.preflightErr
 }
 
-func (s *stubProvider) Fetch(context.Context, string) (*provider.ReviewInput, error) {
+func (s *stubProvider) Fetch(context.Context, string) (*review.ReviewInput, error) {
 	s.fetchHit = true
 	return s.fetchInput, s.fetchErr
 }
@@ -104,7 +105,7 @@ index abc1234..def5678 100644
 // reviewInputWithSessionDiff returns a sampleReviewInput whose Files come from
 // parsing sampleSessionDiff. Tests that need validate() to map finding lines
 // use this instead of the shallow sampleReviewInput().
-func reviewInputWithSessionDiff(t *testing.T) *provider.ReviewInput {
+func reviewInputWithSessionDiff(t *testing.T) *review.ReviewInput {
 	t.Helper()
 	in := sampleReviewInput()
 	in.RawDiff = sampleSessionDiff
@@ -116,10 +117,10 @@ func reviewInputWithSessionDiff(t *testing.T) *provider.ReviewInput {
 	return in
 }
 
-func sampleReviewInput() *provider.ReviewInput {
-	return &provider.ReviewInput{
-		Target: provider.ReviewTarget{
-			Host:    provider.HostGitHub,
+func sampleReviewInput() *review.ReviewInput {
+	return &review.ReviewInput{
+		Target: review.ReviewTarget{
+			Host:    review.HostGitHub,
 			URL:     "https://github.com/owner/repo/pull/42",
 			Owner:   "owner",
 			Repo:    "repo",
@@ -200,9 +201,9 @@ func TestReviewDefaultPathRunsModelAndPrintsFindings(t *testing.T) {
 	}
 	mockModel := &stubModel{
 		name: "codex",
-		reviewResult: &model.ModelReviewResult{
+		reviewResult: &review.ModelReviewResult{
 			Model: "codex",
-			Findings: []model.FindingCandidate{{
+			Findings: []review.FindingCandidate{{
 				File:             "auth/session.go",
 				Line:             13,
 				Severity:         "high",
@@ -255,9 +256,9 @@ func TestReviewDefaultPathFiltersBySelections(t *testing.T) {
 	}
 	mockModel := &stubModel{
 		name: "codex",
-		reviewResult: &model.ModelReviewResult{
+		reviewResult: &review.ModelReviewResult{
 			Model: "codex",
-			Findings: []model.FindingCandidate{
+			Findings: []review.FindingCandidate{
 				{
 					File: "auth/session.go", Line: 13, Severity: "high",
 					Title:            "KEEP-ME: approved finding",

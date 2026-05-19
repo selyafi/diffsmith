@@ -10,6 +10,7 @@ import (
 
 	"github.com/selyafi/diffsmith/internal/diff"
 	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/review"
 )
 
 // recordedCall captures one Runner invocation, including stdin content
@@ -46,9 +47,9 @@ func scriptedRunner(t *testing.T, responses [][]byte) (provider.Runner, *[]recor
 	return run, &calls
 }
 
-func sampleInput() *provider.ReviewInput {
-	return &provider.ReviewInput{
-		Target: provider.ReviewTarget{
+func sampleInput() *review.ReviewInput {
+	return &review.ReviewInput{
+		Target: review.ReviewTarget{
 			URL:     "https://github.com/owner/repo/pull/42",
 			HeadRef: "feat/x",
 			BaseRef: "main",

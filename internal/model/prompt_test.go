@@ -5,12 +5,12 @@ import (
 	"testing"
 
 	"github.com/selyafi/diffsmith/internal/diff"
-	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/review"
 )
 
-func sampleInput() *provider.ReviewInput {
-	return &provider.ReviewInput{
-		Target: provider.ReviewTarget{
+func sampleInput() *review.ReviewInput {
+	return &review.ReviewInput{
+		Target: review.ReviewTarget{
 			URL:     "https://github.com/owner/repo/pull/42",
 			HeadRef: "feat/x",
 			BaseRef: "main",
@@ -59,8 +59,8 @@ func TestBuildPromptIncludesRequiredSections(t *testing.T) {
 }
 
 func TestBuildPromptOmitsEmptyOptionalFields(t *testing.T) {
-	input := &provider.ReviewInput{
-		Target:  provider.ReviewTarget{URL: "https://github.com/o/r/pull/1"},
+	input := &review.ReviewInput{
+		Target:  review.ReviewTarget{URL: "https://github.com/o/r/pull/1"},
 		RawDiff: "",
 	}
 	prompt := BuildPrompt(input)

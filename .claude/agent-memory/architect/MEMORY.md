@@ -1,0 +1,1 @@
+- [Layer dependency map](layer-dependency-map.md) — Inner-to-outer import graph for diffsmith packages and notable inversions.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/review"
 )
 
 // BuildPrompt builds the structured prompt that all v1 model adapters
@@ -15,7 +15,7 @@ import (
 // The prompt is deterministic given the same ReviewInput: tests can pin
 // substrings without flakiness, and reviewers using --print-prompt see
 // exactly what the model will see.
-func BuildPrompt(input *provider.ReviewInput) string {
+func BuildPrompt(input *review.ReviewInput) string {
 	var b strings.Builder
 
 	b.WriteString("You are a code reviewer. Review the diff below and return findings as JSON only.\n\n")

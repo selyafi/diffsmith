@@ -7,6 +7,7 @@ import (
 
 	"github.com/selyafi/diffsmith/internal/diff"
 	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/review"
 )
 
 // Adapter fetches GitHub pull request data via the `gh` CLI.
@@ -44,7 +45,7 @@ func (a *Adapter) Preflight(ctx context.Context) error {
 // Fetch retrieves PR metadata and the unified diff, then returns a
 // normalized ReviewInput. The diff is parsed via internal/diff to surface
 // classification errors early, before the model is invoked.
-func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*provider.ReviewInput, error) {
+func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*review.ReviewInput, error) {
 	ref, err := ParseURL(rawURL)
 	if err != nil {
 		return nil, err
@@ -64,9 +65,9 @@ func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*provider.ReviewInp
 		return nil, fmt.Errorf("parse diff: %w", err)
 	}
 
-	return &provider.ReviewInput{
-		Target: provider.ReviewTarget{
-			Host:    provider.HostGitHub,
+	return &review.ReviewInput{
+		Target: review.ReviewTarget{
+			Host:    review.HostGitHub,
 			URL:     firstNonEmpty(meta.URL, ref.URL),
 			Owner:   ref.Owner,
 			Repo:    ref.Repo,

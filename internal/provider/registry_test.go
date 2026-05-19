@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"testing"
+
+	"github.com/selyafi/diffsmith/internal/review"
 )
 
 type stubProvider struct {
@@ -18,7 +20,7 @@ func (s *stubProvider) Preflight(context.Context) error {
 	return nil
 }
 
-func (s *stubProvider) Fetch(context.Context, string) (*ReviewInput, error) {
+func (s *stubProvider) Fetch(context.Context, string) (*review.ReviewInput, error) {
 	return nil, nil
 }
 

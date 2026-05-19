@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/review"
 )
 
 // recordedCall captures one invocation made by the adapter against the
@@ -81,7 +82,7 @@ func TestAdapterFetchHappyPath(t *testing.T) {
 	}
 
 	// Normalized input checks.
-	if got, want := input.Target.Host, provider.HostGitHub; got != want {
+	if got, want := input.Target.Host, review.HostGitHub; got != want {
 		t.Errorf("Host: got %q, want %q", got, want)
 	}
 	if got, want := input.Target.Number, 42; got != want {

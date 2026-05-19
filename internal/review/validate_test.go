@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/selyafi/diffsmith/internal/diff"
-	"github.com/selyafi/diffsmith/internal/model"
 )
 
 func loadIndex(t *testing.T, fixture string) *diff.Index {
@@ -24,8 +23,8 @@ func loadIndex(t *testing.T, fixture string) *diff.Index {
 	return diff.NewIndex(files)
 }
 
-func validCandidate() model.FindingCandidate {
-	return model.FindingCandidate{
+func validCandidate() FindingCandidate {
+	return FindingCandidate{
 		File:             "auth/session.go",
 		Line:             13,
 		Severity:         "high",
@@ -39,7 +38,7 @@ func validCandidate() model.FindingCandidate {
 
 func TestValidateAcceptsValidCandidate(t *testing.T) {
 	idx := loadIndex(t, "modified_simple.diff")
-	ok, bad := Validate([]model.FindingCandidate{validCandidate()}, "codex", idx)
+	ok, bad := Validate([]FindingCandidate{validCandidate()}, "codex", idx)
 
 	if len(ok) != 1 {
 		t.Fatalf("want 1 valid finding, got %d (bad=%d)", len(ok), len(bad))
@@ -64,23 +63,23 @@ func TestValidateQuarantinesEverySchemaViolation(t *testing.T) {
 
 	cases := []struct {
 		name           string
-		mutate         func(*model.FindingCandidate)
+		mutate         func(*FindingCandidate)
 		reasonContains string
 	}{
-		{"empty file", func(c *model.FindingCandidate) { c.File = "" }, "file is empty"},
-		{"empty suggested_comment", func(c *model.FindingCandidate) { c.SuggestedComment = "" }, "suggested_comment is empty"},
-		{"unknown severity", func(c *model.FindingCandidate) { c.Severity = "critical" }, "unknown severity"},
-		{"confidence above 1", func(c *model.FindingCandidate) { c.Confidence = 1.5 }, "outside [0.0, 1.0]"},
-		{"confidence negative", func(c *model.FindingCandidate) { c.Confidence = -0.1 }, "outside [0.0, 1.0]"},
-		{"file not in diff", func(c *model.FindingCandidate) { c.File = "nope/missing.go" }, "not in the diff"},
-		{"line on context", func(c *model.FindingCandidate) { c.Line = 10 }, "context line"},
-		{"line outside hunk", func(c *model.FindingCandidate) { c.Line = 999 }, "outside any hunk"},
+		{"empty file", func(c *FindingCandidate) { c.File = "" }, "file is empty"},
+		{"empty suggested_comment", func(c *FindingCandidate) { c.SuggestedComment = "" }, "suggested_comment is empty"},
+		{"unknown severity", func(c *FindingCandidate) { c.Severity = "critical" }, "unknown severity"},
+		{"confidence above 1", func(c *FindingCandidate) { c.Confidence = 1.5 }, "outside [0.0, 1.0]"},
+		{"confidence negative", func(c *FindingCandidate) { c.Confidence = -0.1 }, "outside [0.0, 1.0]"},
+		{"file not in diff", func(c *FindingCandidate) { c.File = "nope/missing.go" }, "not in the diff"},
+		{"line on context", func(c *FindingCandidate) { c.Line = 10 }, "context line"},
+		{"line outside hunk", func(c *FindingCandidate) { c.Line = 999 }, "outside any hunk"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := validCandidate()
 			tc.mutate(&c)
-			ok, bad := Validate([]model.FindingCandidate{c}, "codex", idx)
+			ok, bad := Validate([]FindingCandidate{c}, "codex", idx)
 			if len(ok) != 0 || len(bad) != 1 {
 				t.Fatalf("want 0 ok, 1 bad; got %d ok, %d bad", len(ok), len(bad))
 			}
@@ -100,7 +99,7 @@ func TestValidateMixesValidAndQuarantined(t *testing.T) {
 	bad := validCandidate()
 	bad.Line = 10 // context line
 
-	okFindings, quarantined := Validate([]model.FindingCandidate{good, bad}, "codex", idx)
+	okFindings, quarantined := Validate([]FindingCandidate{good, bad}, "codex", idx)
 	if len(okFindings) != 1 {
 		t.Errorf("want 1 valid, got %d", len(okFindings))
 	}
@@ -115,7 +114,7 @@ func TestValidateBinaryFileIsUnaddressable(t *testing.T) {
 	c.File = "assets/logo.png"
 	c.Line = 1
 
-	ok, bad := Validate([]model.FindingCandidate{c}, "codex", idx)
+	ok, bad := Validate([]FindingCandidate{c}, "codex", idx)
 	if len(ok) != 0 || len(bad) != 1 {
 		t.Fatalf("binary file should be unaddressable; got %d ok, %d bad", len(ok), len(bad))
 	}
