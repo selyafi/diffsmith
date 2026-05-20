@@ -39,6 +39,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cur := m.CurrentFinding(); cur != nil {
 				_ = copyToClipboard(cur.SuggestedComment)
 			}
+		case "p":
+			m.MarkCurrentForPost()
 		}
 	}
 	return m, nil

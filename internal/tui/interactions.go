@@ -73,3 +73,28 @@ func (m *Model) GetApprovedFindings() []review.Finding {
 	}
 	return approved
 }
+
+// MarkCurrentForPost flags the currently selected finding for upstream
+// posting. Independent of State — does not promote a Pending finding to
+// Approved, by design (the 'a' key remains the only path to approval).
+func (m *Model) MarkCurrentForPost() {
+	if m.CurrentFinding() == nil {
+		return
+	}
+	if m.markedForPost == nil {
+		m.markedForPost = make(map[int]bool)
+	}
+	m.markedForPost[m.selected] = true
+}
+
+// GetFindingsMarkedForPost returns findings the user explicitly intends
+// to post upstream, in the original order they appeared in the model.
+func (m *Model) GetFindingsMarkedForPost() []review.Finding {
+	var out []review.Finding
+	for i := range m.findings {
+		if m.markedForPost[i] {
+			out = append(out, m.findings[i])
+		}
+	}
+	return out
+}

@@ -9,9 +9,15 @@ import (
 )
 
 // Model is the Bubble Tea model representing the TUI state and findings.
+//
+// markedForPost is a TUI-local intent set kept out of review.Finding so
+// the validated finding contract stays unchanged. Approval (State) and
+// post-intent are orthogonal: the user can approve without posting (for
+// the M5a clipboard workflow), post without approving, or both.
 type Model struct {
-	findings []review.Finding
-	selected int
+	findings      []review.Finding
+	selected      int
+	markedForPost map[int]bool
 }
 
 // NewModel constructs a TUI Model with the given findings.

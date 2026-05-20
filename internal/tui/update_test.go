@@ -104,6 +104,22 @@ func TestUpdateCopyOnC(t *testing.T) {
 	}
 }
 
+// TestUpdateMarkForPostOnP verifies pressing 'p' marks the current
+// finding for upstream posting via the M5b runner.
+func TestUpdateMarkForPostOnP(t *testing.T) {
+	m := NewModel([]review.Finding{
+		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "A", Model: "t", Confidence: 0.5},
+		{File: "b.go", Line: 2, Severity: review.SeverityHigh, Title: "B", Model: "t", Confidence: 0.5},
+	})
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+
+	marked := m.GetFindingsMarkedForPost()
+	if len(marked) != 1 || marked[0].File != "a.go" {
+		t.Errorf("'p' should mark current (a.go) for post; got %+v", marked)
+	}
+}
+
 // TestUpdateUpArrowMovesSelection verifies the up arrow retreats the cursor.
 func TestUpdateUpArrowMovesSelection(t *testing.T) {
 	m := NewModel([]review.Finding{

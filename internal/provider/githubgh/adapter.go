@@ -73,6 +73,7 @@ func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*review.ReviewInput
 			Repo:    ref.Repo,
 			Number:  ref.Number,
 			HeadRef: meta.HeadRefName,
+			HeadSHA: meta.HeadRefOid,
 			BaseRef: meta.BaseRefName,
 		},
 		Title:   meta.Title,
@@ -82,20 +83,22 @@ func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*review.ReviewInput
 	}, nil
 }
 
-// ghMetadata mirrors the JSON shape returned by
-// `gh pr view --json title,author,headRefName,baseRefName,url`.
+// ghMetadata mirrors the JSON shape returned by `gh pr view --json …`.
+// HeadRefOid is the head commit SHA captured at diff-fetch time so the
+// poster can anchor inline comments without re-resolving HEAD later.
 type ghMetadata struct {
 	Title  string `json:"title"`
 	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	HeadRefName string `json:"headRefName"`
+	HeadRefOid  string `json:"headRefOid"`
 	BaseRefName string `json:"baseRefName"`
 	URL         string `json:"url"`
 }
 
 func (a *Adapter) fetchMetadata(ctx context.Context, prURL string) (*ghMetadata, error) {
-	out, err := a.run(ctx, nil, "gh", "pr", "view", prURL, "--json", "title,author,headRefName,baseRefName,url")
+	out, err := a.run(ctx, nil, "gh", "pr", "view", prURL, "--json", "title,author,headRefName,headRefOid,baseRefName,url")
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view: %w", err)
 	}

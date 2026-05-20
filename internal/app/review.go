@@ -9,6 +9,7 @@ import (
 
 	"github.com/selyafi/diffsmith/internal/diff"
 	"github.com/selyafi/diffsmith/internal/model"
+	"github.com/selyafi/diffsmith/internal/post"
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/review"
 	"github.com/selyafi/diffsmith/internal/tui"
@@ -19,9 +20,10 @@ import (
 var runTUI = tui.Run
 
 type reviewFlags struct {
-	model       string
-	dryRun      bool
-	printPrompt bool
+	model        string
+	dryRun       bool
+	printPrompt  bool
+	printPayload bool
 }
 
 func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *cobra.Command {
@@ -42,6 +44,7 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 	cmd.Flags().StringVar(&flags.model, "model", "codex", "model adapter to use (codex)")
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "fetch and normalize the diff, then stop before the model call")
 	cmd.Flags().BoolVar(&flags.printPrompt, "print-prompt", false, "print the model prompt and exit without invoking the model")
+	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print the GraphQL payload(s) for findings marked with 'p' in the TUI, instead of posting upstream")
 
 	return cmd
 }
@@ -94,6 +97,20 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 	if err := runTUI(tm); err != nil {
 		return err
 	}
+
+	if marked := tm.GetFindingsMarkedForPost(); len(marked) > 0 {
+		poster := &post.Poster{Out: cmd.OutOrStdout()}
+		var postErr error
+		if flags.printPayload {
+			postErr = poster.PrintPayload(input.Target, marked)
+		} else {
+			postErr = poster.Submit(ctx, input.Target, marked)
+		}
+		if postErr != nil {
+			return postErr
+		}
+	}
+
 	writeFindings(cmd.OutOrStdout(), tm.GetApprovedFindings(), quarantined)
 	return nil
 }

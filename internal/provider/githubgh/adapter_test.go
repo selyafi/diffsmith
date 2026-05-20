@@ -55,6 +55,7 @@ func TestAdapterFetchHappyPath(t *testing.T) {
 		"title": "Tighten token parsing",
 		"author": {"login": "alice"},
 		"headRefName": "feat/parse",
+		"headRefOid": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
 		"baseRefName": "main",
 		"url": "https://github.com/owner/repo/pull/42"
 	}`)
@@ -72,7 +73,7 @@ func TestAdapterFetchHappyPath(t *testing.T) {
 	if len(*calls) != 2 {
 		t.Fatalf("call count: got %d, want 2", len(*calls))
 	}
-	wantView := []string{"pr", "view", "https://github.com/owner/repo/pull/42", "--json", "title,author,headRefName,baseRefName,url"}
+	wantView := []string{"pr", "view", "https://github.com/owner/repo/pull/42", "--json", "title,author,headRefName,headRefOid,baseRefName,url"}
 	if (*calls)[0].name != "gh" || !reflect.DeepEqual((*calls)[0].args, wantView) {
 		t.Errorf("view call: got %s %v, want gh %v", (*calls)[0].name, (*calls)[0].args, wantView)
 	}
@@ -99,6 +100,9 @@ func TestAdapterFetchHappyPath(t *testing.T) {
 	}
 	if got, want := input.Target.HeadRef, "feat/parse"; got != want {
 		t.Errorf("HeadRef: got %q, want %q", got, want)
+	}
+	if got, want := input.Target.HeadSHA, "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"; got != want {
+		t.Errorf("HeadSHA: got %q, want %q", got, want)
 	}
 	if got, want := input.Target.BaseRef, "main"; got != want {
 		t.Errorf("BaseRef: got %q, want %q", got, want)

@@ -11,6 +11,11 @@ const (
 )
 
 // ReviewTarget identifies the PR/MR being reviewed.
+//
+// HeadSHA is the commit OID at the time the diff was fetched. It is the
+// capture-time anchor used when posting review comments back upstream —
+// re-resolving at post time would risk silently re-anchoring to a moved
+// HEAD if the PR got pushed mid-review.
 type ReviewTarget struct {
 	Host    Host
 	URL     string
@@ -18,6 +23,7 @@ type ReviewTarget struct {
 	Repo    string
 	Number  int
 	HeadRef string
+	HeadSHA string
 	BaseRef string
 }
 

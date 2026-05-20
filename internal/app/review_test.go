@@ -299,6 +299,56 @@ func TestReviewDefaultPathFiltersBySelections(t *testing.T) {
 	}
 }
 
+// TestReviewPrintPayloadRoutesMarkedFindingsToDryRun verifies that
+// pressing 'p' in the TUI plus passing --print-payload short-circuits the
+// upstream submit and instead writes one GraphQL addThread payload per
+// marked finding to stdout, anchored to the capture-time HeadSHA.
+func TestReviewPrintPayloadRoutesMarkedFindingsToDryRun(t *testing.T) {
+	in := reviewInputWithSessionDiff(t)
+	in.Target.HeadSHA = "abc123headsha"
+	stubProv := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: in,
+	}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File:             "auth/session.go",
+				Line:             13,
+				Severity:         "high",
+				Title:            "Mark me for post",
+				SuggestedComment: "post this",
+				Confidence:       0.9,
+			}},
+		},
+	}
+
+	withFakeTUI(t, func(m *tui.Model) error {
+		m.MarkCurrentForPost()
+		return nil
+	})
+
+	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex", "--print-payload"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	got := out.String()
+	for _, want := range []string{
+		"abc123headsha",       // capture-time HeadSHA reaches the payload
+		"pullRequestReviewId", // typed addThreadInput field name
+		"auth/session.go",     // anchored path
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("--print-payload output missing %q.\nFull output:\n%s", want, got)
+		}
+	}
+}
+
 func TestReviewUnknownModelErrors(t *testing.T) {
 	stub := &stubProvider{
 		supports:   func(string) bool { return true },
