@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/selyafi/diffsmith/internal/diff"
 	"github.com/selyafi/diffsmith/internal/model"
 	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/provider/gitlabglab"
 	"github.com/selyafi/diffsmith/internal/review"
 	"github.com/selyafi/diffsmith/internal/tui"
 )
@@ -537,6 +539,102 @@ func TestReviewPrintPayloadFlagBypassesConfirmationPrompt(t *testing.T) {
 	}
 	if !strings.Contains(got, "pullRequestReviewId") {
 		t.Errorf("--print-payload should still print the GraphQL payload; got:\n%s", got)
+	}
+}
+
+// TestReviewPrintPromptHappyPathOnGitLabURL exercises the WHOLE Cobra
+// runReview path against the REAL gitlabglab.Adapter with hermetic seams
+// (stubbed Runner + stubbed LookPath). This is NOT a defaultRegistry
+// dispatch test — the test injects its own registry. Its value is to
+// catch any wiring drift between the Adapter and the app layer (e.g. if
+// BuildPrompt broke for a GitLab ReviewInput). See M6d plan for the
+// asymmetry rationale.
+func TestReviewPrintPromptHappyPathOnGitLabURL(t *testing.T) {
+	const mrJSON = `{
+		"title": "Pin context to request scope",
+		"author": {"username": "alice"},
+		"source_branch": "feat/ctx-scope",
+		"target_branch": "main",
+		"sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"web_url": "https://gitlab.com/group/project/-/merge_requests/42"
+	}`
+	const synthDiff = `diff --git a/svc/handler.go b/svc/handler.go
+index 1111111..2222222 100644
+--- a/svc/handler.go
++++ b/svc/handler.go
+@@ -8,7 +8,7 @@ func Handle(req *Request) (*Response, error) {
+ 	if req == nil {
+ 		return nil, errors.New("nil request")
+ 	}
+-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
+ 	defer cancel()
+ 	return process(ctx, req)
+ }
+`
+
+	// Argv-aware stub runner that asserts FULL argv equality on each call
+	// (not just prefix) so a wrong flag, missing flag, or extra call fails
+	// the test. Also records the call sequence to verify exactly 3 calls
+	// were made — no duplicates, no missing.
+	var calls [][]string
+	stubRun := func(_ context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
+		if name != "glab" {
+			t.Fatalf("unexpected command name: %s (args=%v)", name, args)
+		}
+		calls = append(calls, append([]string(nil), args...))
+		// Compare full argv against the three expected shapes.
+		switch {
+		case reflect.DeepEqual(args, []string{"auth", "status"}):
+			return []byte("Logged in as alice"), nil
+		case reflect.DeepEqual(args, []string{"mr", "view", "42", "-R", "https://gitlab.com/group/project", "--output", "json"}):
+			return []byte(mrJSON), nil
+		case reflect.DeepEqual(args, []string{"mr", "diff", "42", "-R", "https://gitlab.com/group/project", "--raw", "--color", "never"}):
+			return []byte(synthDiff), nil
+		default:
+			t.Fatalf("unexpected runner call: glab %v", args)
+			return nil, nil
+		}
+	}
+	fakeLookPath := func(string) (string, error) { return "/fake/glab", nil }
+
+	// Custom registry containing the REAL Adapter with hermetic seams.
+	registry := provider.NewRegistry(gitlabglab.NewWithLookPath(stubRun, fakeLookPath))
+	root := &cobra.Command{Use: "diffsmith", SilenceUsage: true}
+	root.AddCommand(newReviewCmd(registry, nil))
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"review", "https://gitlab.com/group/project/-/merge_requests/42", "--print-prompt"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Exactly 3 runner invocations: auth-status, mr view, mr diff (no
+	// duplicates, no missing).
+	if got, want := len(calls), 3; got != want {
+		t.Errorf("runner call count: got %d, want %d (auth+view+diff). Calls:\n%v", got, want, calls)
+	}
+
+	got := buf.String()
+	// Metadata substrings catch drift in the context-block side of BuildPrompt.
+	for _, want := range []string{
+		"https://gitlab.com/group/project/-/merge_requests/42",
+		"Pin context to request scope",
+		"Author: alice",
+		"feat/ctx-scope",
+		"main",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt output missing %q.\nFull output:\n%s", want, got)
+		}
+	}
+	// A diff-block-only substring (the unified-diff header) — if BuildPrompt
+	// dropped the RawDiff entirely, this would fail; the filename alone
+	// would not because it appears in the Files section too.
+	if !strings.Contains(got, "diff --git a/svc/handler.go") {
+		t.Errorf("prompt output missing the unified diff header — RawDiff may not be wired into BuildPrompt.\nFull output:\n%s", got)
 	}
 }
 

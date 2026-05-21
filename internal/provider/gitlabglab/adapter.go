@@ -20,14 +20,23 @@ type Adapter struct {
 
 // New constructs an Adapter. Passing nil uses provider.DefaultRunner and
 // a default Preflight that calls exec.LookPath. Tests that need to
-// substitute LookPath can build an Adapter literal directly.
+// substitute LookPath can use NewWithLookPath.
 func New(run provider.Runner) *Adapter {
+	return NewWithLookPath(run, nil)
+}
+
+// NewWithLookPath constructs an Adapter with explicit run + lookPath
+// injection so cross-package tests (e.g. internal/app/) can build a
+// fully hermetic Adapter that needs neither real `glab` on PATH nor
+// real network. Passing nil for either falls back to defaults
+// (provider.DefaultRunner, exec.LookPath).
+func NewWithLookPath(run provider.Runner, lookPath func(string) (string, error)) *Adapter {
 	if run == nil {
 		run = provider.DefaultRunner
 	}
 	return &Adapter{
 		run:       run,
-		preflight: NewPreflight(run, nil),
+		preflight: NewPreflight(run, lookPath),
 	}
 }
 

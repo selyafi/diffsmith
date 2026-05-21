@@ -8,6 +8,7 @@ import (
 	"github.com/selyafi/diffsmith/internal/model/codexcli"
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/provider/githubgh"
+	"github.com/selyafi/diffsmith/internal/provider/gitlabglab"
 )
 
 func newRootCmd() *cobra.Command {
@@ -28,7 +29,7 @@ func newRootCmd() *cobra.Command {
 // build their own registry with stub providers and pass it to
 // newReviewCmd directly.
 func defaultRegistry() *provider.Registry {
-	return provider.NewRegistry(githubgh.New(nil))
+	return provider.NewRegistry(githubgh.New(nil), gitlabglab.New(nil))
 }
 
 // defaultModels returns the model registry wired to real CLIs. Only
