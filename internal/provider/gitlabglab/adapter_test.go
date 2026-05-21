@@ -1,0 +1,276 @@
+package gitlabglab
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/review"
+)
+
+// recordedCall captures one invocation made by the adapter against the
+// mock Runner.
+type recordedCall struct {
+	name string
+	args []string
+}
+
+// scriptedRunner returns canned responses in order. If responses run out,
+// it fails the test. Each entry can be either a (body, nil) success or a
+// (nil, err) failure.
+type scriptResult struct {
+	out []byte
+	err error
+}
+
+func scriptedRunner(t *testing.T, results []scriptResult) (provider.Runner, *[]recordedCall) {
+	t.Helper()
+	var calls []recordedCall
+	i := 0
+	run := func(_ context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
+		calls = append(calls, recordedCall{name: name, args: append([]string(nil), args...)})
+		if i >= len(results) {
+			t.Fatalf("unexpected call #%d: %s %v", i+1, name, args)
+		}
+		r := results[i]
+		i++
+		return r.out, r.err
+	}
+	return run, &calls
+}
+
+func readDiffFixture(t *testing.T) []byte {
+	t.Helper()
+	path := filepath.Join("testdata", "synthetic.diff")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read synthetic.diff: %v", err)
+	}
+	return data
+}
+
+// singleGroupMetadata returns a valid mr-view JSON body for the
+// single-group happy-path test. Snake_case fields mirror GitLab's REST
+// API response shape so the real Fetch can decode the same JSON.
+func singleGroupMetadata() []byte {
+	return []byte(`{
+		"title": "Pin context to request scope",
+		"author": {"username": "alice"},
+		"source_branch": "feat/ctx-scope",
+		"target_branch": "main",
+		"sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"web_url": "https://gitlab.com/group/project/-/merge_requests/42"
+	}`)
+}
+
+func nestedGroupMetadata() []byte {
+	return []byte(`{
+		"title": "Nested-group MR",
+		"author": {"username": "bob"},
+		"source_branch": "feat/nested",
+		"target_branch": "main",
+		"sha": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		"web_url": "https://gitlab.com/group/sub/project/-/merge_requests/9001"
+	}`)
+}
+
+func TestAdapterFetchHappyPathSingleGroup(t *testing.T) {
+	rawDiff := readDiffFixture(t)
+	run, calls := scriptedRunner(t, []scriptResult{
+		{out: singleGroupMetadata()},
+		{out: rawDiff},
+	})
+	a := New(run)
+
+	input, err := a.Fetch(context.Background(),
+		"https://gitlab.com/group/project/-/merge_requests/42/diffs?tab=overview")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	if len(*calls) != 2 {
+		t.Fatalf("call count: got %d, want 2 (mr view + mr diff)", len(*calls))
+	}
+	wantView := []string{"mr", "view", "42", "-R", "https://gitlab.com/group/project", "--output", "json"}
+	if (*calls)[0].name != "glab" || !reflect.DeepEqual((*calls)[0].args, wantView) {
+		t.Errorf("view call: got %s %v, want glab %v", (*calls)[0].name, (*calls)[0].args, wantView)
+	}
+	wantDiff := []string{"mr", "diff", "42", "-R", "https://gitlab.com/group/project", "--raw", "--color", "never"}
+	if (*calls)[1].name != "glab" || !reflect.DeepEqual((*calls)[1].args, wantDiff) {
+		t.Errorf("diff call: got %s %v, want glab %v", (*calls)[1].name, (*calls)[1].args, wantDiff)
+	}
+
+	if got, want := input.Target.Host, review.HostGitLab; got != want {
+		t.Errorf("Host: got %q, want %q", got, want)
+	}
+	if got, want := input.Target.Number, 42; got != want {
+		t.Errorf("Number: got %d, want %d", got, want)
+	}
+	if got, want := input.Target.Owner, "group"; got != want {
+		t.Errorf("Owner: got %q, want %q", got, want)
+	}
+	if got, want := input.Target.Repo, "project"; got != want {
+		t.Errorf("Repo: got %q, want %q", got, want)
+	}
+	if got, want := input.Target.URL, "https://gitlab.com/group/project/-/merge_requests/42"; got != want {
+		t.Errorf("Target.URL: got %q, want %q", got, want)
+	}
+	if got, want := input.Title, "Pin context to request scope"; got != want {
+		t.Errorf("Title: got %q, want %q", got, want)
+	}
+	if got, want := input.Author, "alice"; got != want {
+		t.Errorf("Author: got %q, want %q", got, want)
+	}
+	if got, want := input.Target.HeadRef, "feat/ctx-scope"; got != want {
+		t.Errorf("HeadRef: got %q, want %q", got, want)
+	}
+	if got, want := input.Target.HeadSHA, "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"; got != want {
+		t.Errorf("HeadSHA: got %q, want %q", got, want)
+	}
+	if got, want := input.Target.BaseRef, "main"; got != want {
+		t.Errorf("BaseRef: got %q, want %q", got, want)
+	}
+	if input.RawDiff != string(rawDiff) {
+		t.Errorf("RawDiff: byte-for-byte mismatch against fixture")
+	}
+	if len(input.Files) != 1 {
+		t.Errorf("Files: got %d files, want 1", len(input.Files))
+	} else if input.Files[0].Path != "svc/handler.go" {
+		t.Errorf("Files[0].Path: got %q, want %q", input.Files[0].Path, "svc/handler.go")
+	}
+}
+
+func TestAdapterFetchHappyPathNestedGroup(t *testing.T) {
+	rawDiff := readDiffFixture(t)
+	run, calls := scriptedRunner(t, []scriptResult{
+		{out: nestedGroupMetadata()},
+		{out: rawDiff},
+	})
+	a := New(run)
+
+	input, err := a.Fetch(context.Background(),
+		"https://gitlab.com/group/sub/project/-/merge_requests/9001")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+
+	wantRepoURL := "https://gitlab.com/group/sub/project"
+	wantView := []string{"mr", "view", "9001", "-R", wantRepoURL, "--output", "json"}
+	if !reflect.DeepEqual((*calls)[0].args, wantView) {
+		t.Errorf("view call argv: got %v, want %v", (*calls)[0].args, wantView)
+	}
+	wantDiff := []string{"mr", "diff", "9001", "-R", wantRepoURL, "--raw", "--color", "never"}
+	if !reflect.DeepEqual((*calls)[1].args, wantDiff) {
+		t.Errorf("diff call argv: got %v, want %v", (*calls)[1].args, wantDiff)
+	}
+
+	if got, want := input.Target.Owner, "group/sub"; got != want {
+		t.Errorf("Owner (nested): got %q, want %q", got, want)
+	}
+	if got, want := input.Target.Repo, "project"; got != want {
+		t.Errorf("Repo (nested): got %q, want %q", got, want)
+	}
+	if got, want := input.Target.Number, 9001; got != want {
+		t.Errorf("Number: got %d, want %d", got, want)
+	}
+	if input.RawDiff != string(rawDiff) {
+		t.Errorf("RawDiff: byte-for-byte mismatch against fixture")
+	}
+}
+
+func TestAdapterFetchRejectsNonGitLabURL(t *testing.T) {
+	run := func(context.Context, io.Reader, string, ...string) ([]byte, error) {
+		t.Fatal("runner must not be invoked when URL parsing fails")
+		return nil, nil
+	}
+	a := New(provider.Runner(run))
+
+	_, err := a.Fetch(context.Background(), "https://github.com/owner/repo/pull/1")
+	if err == nil {
+		t.Fatal("want error for GitHub URL, got nil")
+	}
+	// The error must originate from ParseURL (host-guard), NOT from a
+	// downstream stub returning a generic error. This distinguishes "we
+	// bailed at URL parsing" from "we ran something and it failed".
+	if !strings.Contains(err.Error(), "expected gitlab.com") {
+		t.Errorf("want ParseURL host-guard error mentioning 'expected gitlab.com', got: %v", err)
+	}
+}
+
+func TestAdapterFetchSurfacesViewCommandError(t *testing.T) {
+	run, _ := scriptedRunner(t, []scriptResult{
+		{err: errors.New("glab: exit 4: not authenticated")},
+	})
+	a := New(run)
+
+	_, err := a.Fetch(context.Background(), "https://gitlab.com/group/project/-/merge_requests/1")
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "glab mr view") {
+		t.Errorf("error should identify the failing command 'glab mr view', got: %v", err)
+	}
+}
+
+func TestAdapterFetchSurfacesDiffCommandError(t *testing.T) {
+	run, _ := scriptedRunner(t, []scriptResult{
+		{out: singleGroupMetadata()},
+		{err: errors.New("glab: exit 1: diff failed")},
+	})
+	a := New(run)
+
+	_, err := a.Fetch(context.Background(), "https://gitlab.com/group/project/-/merge_requests/42")
+	if err == nil {
+		t.Fatal("want diff-command error, got nil")
+	}
+	if !strings.Contains(err.Error(), "glab mr diff") {
+		t.Errorf("error should identify the failing command 'glab mr diff' (NOT 'glab mr view'), got: %v", err)
+	}
+	if strings.Contains(err.Error(), "glab mr view") {
+		t.Errorf("diff-error must not be mis-attributed to 'glab mr view'; got: %v", err)
+	}
+}
+
+func TestAdapterFetchSurfacesMalformedJSON(t *testing.T) {
+	run, _ := scriptedRunner(t, []scriptResult{
+		{out: []byte("not json")},
+	})
+	a := New(run)
+
+	_, err := a.Fetch(context.Background(), "https://gitlab.com/group/project/-/merge_requests/1")
+	if err == nil || !strings.Contains(err.Error(), "decode glab mr view JSON") {
+		t.Errorf("want decode error mentioning 'decode glab mr view JSON', got: %v", err)
+	}
+}
+
+func TestAdapterFetchRejectsEmptySHA(t *testing.T) {
+	emptySHAMeta := []byte(`{
+		"title": "no sha",
+		"author": {"username": "alice"},
+		"source_branch": "x",
+		"target_branch": "main",
+		"sha": "",
+		"web_url": "https://gitlab.com/group/project/-/merge_requests/7"
+	}`)
+	run, _ := scriptedRunner(t, []scriptResult{
+		{out: emptySHAMeta},
+	})
+	a := New(run)
+
+	_, err := a.Fetch(context.Background(), "https://gitlab.com/group/project/-/merge_requests/7")
+	if err == nil {
+		t.Fatal("want error when sha is empty, got nil")
+	}
+	// Message should reference the empty/missing sha condition so the user
+	// understands why the fetch was rejected (vs. e.g. a transport error).
+	msg := err.Error()
+	if !strings.Contains(msg, "sha") {
+		t.Errorf("error must mention 'sha' to localise the cause; got: %v", err)
+	}
+}

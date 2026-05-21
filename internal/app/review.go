@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -18,6 +19,13 @@ import (
 // runTUI is the seam between runReview and the interactive Bubble Tea
 // program. Tests swap this to drive the model without a TTY.
 var runTUI = tui.Run
+
+// submitPost is the seam between runReview and the GitHub poster. Tests
+// swap this to assert whether the Submit branch ran (and with what
+// findings) without shelling out to gh. Mirrors the runTUI pattern.
+var submitPost = func(ctx context.Context, out io.Writer, target review.ReviewTarget, marked []review.Finding) error {
+	return (&post.Poster{Out: out}).Submit(ctx, target, marked)
+}
 
 type reviewFlags struct {
 	model        string
@@ -99,12 +107,12 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 	}
 
 	if marked := tm.GetFindingsMarkedForPost(); len(marked) > 0 {
-		poster := &post.Poster{Out: cmd.OutOrStdout()}
 		var postErr error
-		if flags.printPayload {
-			postErr = poster.PrintPayload(input.Target, marked)
-		} else {
-			postErr = poster.Submit(ctx, input.Target, marked)
+		switch {
+		case flags.printPayload:
+			postErr = (&post.Poster{Out: cmd.OutOrStdout()}).PrintPayload(input.Target, marked)
+		case confirmPost(cmd, len(marked), input.Target.Number):
+			postErr = submitPost(ctx, cmd.OutOrStdout(), input.Target, marked)
 		}
 		if postErr != nil {
 			return postErr
@@ -113,6 +121,23 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 
 	writeFindings(cmd.OutOrStdout(), tm.GetApprovedFindings(), quarantined)
 	return nil
+}
+
+// confirmPost prints a one-line preview to cmd.OutOrStdout and reads a
+// single byte from cmd.InOrStdin to gate the upstream submit. The "press
+// y, anything else to abort" framing means a reflex Enter (newline byte)
+// bails safely; EOF (empty stdin) also bails so an unattached terminal
+// can never auto-confirm. Capital and lowercase Y are both accepted so
+// users don't have to switch shift state to confirm.
+func confirmPost(cmd *cobra.Command, n, prNumber int) bool {
+	fmt.Fprintf(cmd.OutOrStdout(),
+		"About to post %d comment(s) to PR #%d. Press y to confirm, anything else to abort.\n",
+		n, prNumber)
+	b, err := bufio.NewReader(cmd.InOrStdin()).ReadByte()
+	if err != nil {
+		return false
+	}
+	return b == 'y' || b == 'Y'
 }
 
 // writeFindings renders the post-TUI summary so approved findings can be

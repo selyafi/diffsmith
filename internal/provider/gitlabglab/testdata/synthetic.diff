@@ -1,0 +1,13 @@
+diff --git a/svc/handler.go b/svc/handler.go
+index 1111111..2222222 100644
+--- a/svc/handler.go
++++ b/svc/handler.go
+@@ -8,7 +8,7 @@ func Handle(req *Request) (*Response, error) {
+ 	if req == nil {
+ 		return nil, errors.New("nil request")
+ 	}
+-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
+ 	defer cancel()
+ 	return process(ctx, req)
+ }

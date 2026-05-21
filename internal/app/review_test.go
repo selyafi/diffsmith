@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -346,6 +347,196 @@ func TestReviewPrintPayloadRoutesMarkedFindingsToDryRun(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("--print-payload output missing %q.\nFull output:\n%s", want, got)
 		}
+	}
+}
+
+// withFakeSubmit swaps submitPost so tests can observe whether the
+// non-print-payload branch ran without shelling out to gh. Returns a
+// pointer-to-int that the fake increments on each call and a slice that
+// captures the findings it was handed.
+func withFakeSubmit(t *testing.T) (calls *int, captured *[]review.Finding) {
+	t.Helper()
+	c := 0
+	var f []review.Finding
+	prev := submitPost
+	submitPost = func(_ context.Context, _ io.Writer, _ review.ReviewTarget, marked []review.Finding) error {
+		c++
+		f = append([]review.Finding(nil), marked...)
+		return nil
+	}
+	t.Cleanup(func() { submitPost = prev })
+	return &c, &f
+}
+
+// stdinFor wires a reader as the cobra root's stdin so the confirmation
+// prompt reads from this string instead of the real terminal.
+func stdinFor(s string) *strings.Reader { return strings.NewReader(s) }
+
+func TestReviewConfirmationPromptYesProceedsToSubmit(t *testing.T) {
+	stubProv := &stubProvider{supports: func(string) bool { return true }, fetchInput: reviewInputWithSessionDiff(t)}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File: "auth/session.go", Line: 13, Severity: "high",
+				Title: "Mark me", SuggestedComment: "post this", Confidence: 0.9,
+			}},
+		},
+	}
+	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
+	calls, captured := withFakeSubmit(t)
+
+	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetIn(stdinFor("y\n"))
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if *calls != 1 {
+		t.Errorf("submitPost should run once on 'y'; got %d calls", *calls)
+	}
+	if got := len(*captured); got != 1 {
+		t.Errorf("submitPost should receive the 1 marked finding; got %d", got)
+	}
+	got := out.String()
+	if !strings.Contains(got, "About to post 1 comment(s) to PR #42") {
+		t.Errorf("confirmation line should name N=1 and PR#42; got:\n%s", got)
+	}
+}
+
+func TestReviewConfirmationPromptCapitalYProceedsToSubmit(t *testing.T) {
+	stubProv := &stubProvider{supports: func(string) bool { return true }, fetchInput: reviewInputWithSessionDiff(t)}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File: "auth/session.go", Line: 13, Severity: "high",
+				Title: "Mark me", SuggestedComment: "post this", Confidence: 0.9,
+			}},
+		},
+	}
+	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
+	calls, _ := withFakeSubmit(t)
+
+	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetIn(stdinFor("Y\n"))
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if *calls != 1 {
+		t.Errorf("submitPost should run once on 'Y'; got %d calls", *calls)
+	}
+	// Capital Y must traverse the SAME confirmation path as lowercase y; the
+	// prompt line must appear before stdin is read.
+	if !strings.Contains(out.String(), "About to post") {
+		t.Errorf("confirmation line must appear before reading stdin; got:\n%s", out.String())
+	}
+}
+
+func TestReviewConfirmationPromptNonYesSkipsSubmit(t *testing.T) {
+	stubProv := &stubProvider{supports: func(string) bool { return true }, fetchInput: reviewInputWithSessionDiff(t)}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File: "auth/session.go", Line: 13, Severity: "high",
+				Title: "DO-NOT-POST", SuggestedComment: "if you see Submit run, this test failed", Confidence: 0.9,
+			}},
+		},
+	}
+	// Approve AND mark for post so the finding appears in the writeFindings
+	// summary even when Submit is skipped (acceptance: "skip the Submit call
+	// but still print the writeFindings summary").
+	withFakeTUI(t, func(m *tui.Model) error {
+		m.ApproveCurrent()
+		m.MarkCurrentForPost()
+		return nil
+	})
+	calls, _ := withFakeSubmit(t)
+
+	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetIn(stdinFor("n\n"))
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if *calls != 0 {
+		t.Errorf("submitPost must NOT run on 'n'; got %d calls", *calls)
+	}
+	got := out.String()
+	if !strings.Contains(got, "About to post") {
+		t.Errorf("confirmation line should still print before reading stdin; got:\n%s", got)
+	}
+	// writeFindings summary must still appear so the user knows what they would have posted.
+	if !strings.Contains(got, "DO-NOT-POST") {
+		t.Errorf("writeFindings summary should still appear on cancel; got:\n%s", got)
+	}
+}
+
+func TestReviewConfirmationPromptEOFSkipsSubmit(t *testing.T) {
+	stubProv := &stubProvider{supports: func(string) bool { return true }, fetchInput: reviewInputWithSessionDiff(t)}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File: "auth/session.go", Line: 13, Severity: "high",
+				Title: "Mark me", SuggestedComment: "post this", Confidence: 0.9,
+			}},
+		},
+	}
+	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
+	calls, _ := withFakeSubmit(t)
+
+	root, _ := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetIn(stdinFor("")) // empty -> ReadByte returns io.EOF
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if *calls != 0 {
+		t.Errorf("submitPost must NOT run on EOF (empty stdin); got %d calls", *calls)
+	}
+}
+
+func TestReviewPrintPayloadFlagBypassesConfirmationPrompt(t *testing.T) {
+	in := reviewInputWithSessionDiff(t)
+	in.Target.HeadSHA = "abc123headsha"
+	stubProv := &stubProvider{supports: func(string) bool { return true }, fetchInput: in}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File: "auth/session.go", Line: 13, Severity: "high",
+				Title: "Mark me", SuggestedComment: "post this", Confidence: 0.9,
+			}},
+		},
+	}
+	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
+
+	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	// Empty stdin would block forever if --print-payload didn't bypass the prompt.
+	root.SetIn(stdinFor(""))
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex", "--print-payload"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "About to post") {
+		t.Errorf("--print-payload must bypass the confirmation prompt entirely; got:\n%s", got)
+	}
+	if !strings.Contains(got, "pullRequestReviewId") {
+		t.Errorf("--print-payload should still print the GraphQL payload; got:\n%s", got)
 	}
 }
 

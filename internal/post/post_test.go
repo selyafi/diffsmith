@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -18,39 +19,16 @@ type recordedGHCall struct {
 	stdin string
 }
 
-// scriptedGH installs runGH with a stub that returns canned responses in
-// order and records each call. It restores the original runGH on Cleanup.
+// scriptedGH installs runGH with a stub that returns canned successful
+// responses in order. Thin wrapper over scriptedGHResults for tests
+// whose every gh call is expected to succeed.
 func scriptedGH(t *testing.T, responses [][]byte) *[]recordedGHCall {
 	t.Helper()
-	prev := runGH
-	t.Cleanup(func() { runGH = prev })
-
-	var calls []recordedGHCall
-	i := 0
-	runGH = func(_ context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
-		if name != "gh" {
-			t.Errorf("unexpected command: %s", name)
-		}
-		var body []byte
-		if stdin != nil {
-			b, err := io.ReadAll(stdin)
-			if err != nil {
-				t.Fatalf("read stdin: %v", err)
-			}
-			body = b
-		}
-		calls = append(calls, recordedGHCall{
-			args:  append([]string(nil), args...),
-			stdin: string(body),
-		})
-		if i >= len(responses) {
-			t.Fatalf("unexpected call #%d: %s %v", i+1, name, args)
-		}
-		out := responses[i]
-		i++
-		return out, nil
+	results := make([]ghResult, len(responses))
+	for i, r := range responses {
+		results[i] = ghResult{out: r}
 	}
-	return &calls
+	return scriptedGHResults(t, results)
 }
 
 func TestPoster_Submit_OrchestratesFourPhaseGraphQLFlow(t *testing.T) {
@@ -165,6 +143,233 @@ func TestPoster_PrintPayload_WritesOneAnchoredJSONPerFinding(t *testing.T) {
 		if got.Line != findings[i].Line {
 			t.Errorf("line %d: Line = %d, want %d", i, got.Line, findings[i].Line)
 		}
+	}
+}
+
+// ghResult scripts one runGH call's outcome: either a canned response body
+// (out) or a transport error (err). Used by scriptedGHResults to drive
+// failure-path tests where the existing scriptedGH (which only models
+// success) can't express thread-level failures.
+type ghResult struct {
+	out []byte
+	err error
+}
+
+func scriptedGHResults(t *testing.T, results []ghResult) *[]recordedGHCall {
+	t.Helper()
+	prev := runGH
+	t.Cleanup(func() { runGH = prev })
+
+	var calls []recordedGHCall
+	i := 0
+	runGH = func(_ context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		if name != "gh" {
+			t.Errorf("unexpected command: %s", name)
+		}
+		var body []byte
+		if stdin != nil {
+			b, err := io.ReadAll(stdin)
+			if err != nil {
+				t.Fatalf("read stdin: %v", err)
+			}
+			body = b
+		}
+		calls = append(calls, recordedGHCall{
+			args:  append([]string(nil), args...),
+			stdin: string(body),
+		})
+		if i >= len(results) {
+			t.Fatalf("unexpected call #%d: %s %v", i+1, name, args)
+		}
+		r := results[i]
+		i++
+		return r.out, r.err
+	}
+	return &calls
+}
+
+func TestPoster_Submit_ContinuesAfterPartialThreadFailure(t *testing.T) {
+	// 3 findings; thread #2 fails. Threads #1 and #3 must still be
+	// attempted, submitReview must still run (≥1 succeeded), the URL
+	// must be printed, and a summary line "Posted: 2/3 ..." with the
+	// failing finding's location and error must appear before the URL.
+	results := []ghResult{
+		{out: []byte(`{"data":{"repository":{"pullRequest":{"id":"PR_X"}}}}`)},
+		{out: []byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_X"}}}}`)},
+		{out: []byte(`{"data":{"addPullRequestReviewThread":{"thread":{}}}}`)},
+		{err: errors.New("permission denied")},
+		{out: []byte(`{"data":{"addPullRequestReviewThread":{"thread":{}}}}`)},
+		{out: []byte(`{"data":{"submitPullRequestReview":{"pullRequestReview":{"url":"https://github.com/owner/repo/pull/42#pullrequestreview-999"}}}}`)},
+	}
+	calls := scriptedGHResults(t, results)
+
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf}
+	target := review.ReviewTarget{Owner: "owner", Repo: "repo", Number: 42, HeadSHA: "a1b2c3d4"}
+	findings := []review.Finding{
+		{File: "f1.go", Line: 10, Severity: review.SeverityHigh, Title: "T1", SuggestedComment: "C1"},
+		{File: "f2.go", Line: 20, Severity: review.SeverityMedium, Title: "T2", SuggestedComment: "C2"},
+		{File: "f3.go", Line: 30, Severity: review.SeverityLow, Title: "T3", SuggestedComment: "C3"},
+	}
+
+	if err := p.Submit(context.Background(), target, findings); err != nil {
+		t.Fatalf("Submit: expected nil on partial success, got %v", err)
+	}
+
+	// resolve + beginReview + 3 thread attempts (including the failure) + submitReview = 6 calls.
+	if got, want := len(*calls), 6; got != want {
+		t.Fatalf("call count: got %d, want %d (resolve+begin+3 threads+submit)", got, want)
+	}
+
+	// Thread #3 must still be attempted after #2 failed.
+	if !strings.Contains((*calls)[4].stdin, "f3.go") {
+		t.Errorf("call #5 should be addThread for f3.go (loop must continue past failure)\nSTDIN:\n%s", (*calls)[4].stdin)
+	}
+
+	// submitReview must run on partial success.
+	if !strings.Contains((*calls)[5].stdin, "submitPullRequestReview(") {
+		t.Errorf("call #6 should be submitReview on partial success\nSTDIN:\n%s", (*calls)[5].stdin)
+	}
+
+	out := buf.String()
+	summaryIdx := strings.Index(out, "Posted: 2/3")
+	urlIdx := strings.Index(out, "pullrequestreview-999")
+	if summaryIdx < 0 {
+		t.Errorf("summary 'Posted: 2/3 ...' missing from output:\n%s", out)
+	}
+	if urlIdx < 0 {
+		t.Errorf("review URL missing from output:\n%s", out)
+	}
+	if summaryIdx >= 0 && urlIdx >= 0 && summaryIdx > urlIdx {
+		t.Errorf("summary must appear BEFORE the URL; summaryIdx=%d urlIdx=%d\nOUTPUT:\n%s", summaryIdx, urlIdx, out)
+	}
+	if !strings.Contains(out, "f2.go:20") {
+		t.Errorf("failed finding location (f2.go:20) missing from output:\n%s", out)
+	}
+	if !strings.Contains(out, "permission denied") {
+		t.Errorf("failed finding error ('permission denied') missing from output:\n%s", out)
+	}
+}
+
+func TestPoster_Submit_DeletesPendingReviewWhenAllThreadsFail(t *testing.T) {
+	// All threads fail. submitReview MUST NOT run; deletePullRequestReview
+	// MUST run to clean up the stranded pending review on GitHub. Submit
+	// must return a non-nil error so callers can surface the failure.
+	results := []ghResult{
+		{out: []byte(`{"data":{"repository":{"pullRequest":{"id":"PR_X"}}}}`)},
+		{out: []byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_X"}}}}`)},
+		{err: errors.New("err1")},
+		{err: errors.New("err2")},
+		{out: []byte(`{"data":{"deletePullRequestReview":{"pullRequestReview":{"id":"PRR_X"}}}}`)},
+	}
+	calls := scriptedGHResults(t, results)
+
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf}
+	target := review.ReviewTarget{Owner: "owner", Repo: "repo", Number: 42, HeadSHA: "sha"}
+	findings := []review.Finding{
+		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T1", SuggestedComment: "C1"},
+		{File: "b.go", Line: 2, Severity: review.SeverityLow, Title: "T2", SuggestedComment: "C2"},
+	}
+
+	err := p.Submit(context.Background(), target, findings)
+	if err == nil {
+		t.Fatal("Submit: expected error when all threads fail, got nil")
+	}
+
+	// resolve + beginReview + 2 thread attempts + deleteReview = 5 calls. submitReview must NOT run.
+	if got, want := len(*calls), 5; got != want {
+		t.Fatalf("call count: got %d, want %d (resolve+begin+2 threads+delete; no submit)", got, want)
+	}
+	if !strings.Contains((*calls)[4].stdin, "deletePullRequestReview(") {
+		t.Errorf("call #5 should be deletePullRequestReview when all threads fail\nSTDIN:\n%s", (*calls)[4].stdin)
+	}
+	for i, c := range *calls {
+		if strings.Contains(c.stdin, "submitPullRequestReview(") {
+			t.Errorf("submitReview must NOT run when all threads fail; found in call #%d\nSTDIN:\n%s", i+1, c.stdin)
+		}
+	}
+}
+
+func TestGraphqlCall_ReturnsErrorOnErrorsOnlyResponse(t *testing.T) {
+	// gh exits 0 with {data:null, errors:[{...}]} for permission denials,
+	// invalid input, etc. graphqlCall must surface the first errors[] entry
+	// as a clean 'graphql: <msg>' before per-step decoders see the null data
+	// and produce the confusing 'empty PR ID in response' message.
+	scriptedGHResults(t, []ghResult{
+		{out: []byte(`{"data":null,"errors":[{"message":"Resource not accessible by integration"}]}`)},
+	})
+
+	_, err := graphqlCall(context.Background(), "query{x}", nil)
+	if err == nil {
+		t.Fatal("graphqlCall: expected error on errors-only response, got nil")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "graphql:") {
+		t.Errorf("error should start with 'graphql:' prefix; got %q", msg)
+	}
+	if !strings.Contains(msg, "Resource not accessible by integration") {
+		t.Errorf("error should include the gh-supplied message; got %q", msg)
+	}
+}
+
+func TestGraphqlCall_ReturnsErrorOnPartialResponse(t *testing.T) {
+	// GraphQL spec allows errors[] alongside non-null data (partial success).
+	// We treat any non-empty errors[] as failure so callers don't silently
+	// proceed on half-broken responses. Two messages must be joined.
+	scriptedGHResults(t, []ghResult{
+		{out: []byte(`{"data":{"repository":{"pullRequest":{"id":"PR_X"}}},"errors":[{"message":"oops one"},{"message":"oops two"}]}`)},
+	})
+
+	_, err := graphqlCall(context.Background(), "query{x}", nil)
+	if err == nil {
+		t.Fatal("graphqlCall: expected error when errors[] non-empty alongside data, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "oops one") || !strings.Contains(msg, "oops two") {
+		t.Errorf("error should join all messages; got %q", msg)
+	}
+}
+
+func TestPoster_Submit_RoutesGraphQLBodyErrorsThroughFailureSummary(t *testing.T) {
+	// Integration: a thread call that returns gh-200 with errors[] should
+	// behave exactly like a transport failure — the finding lands in the
+	// failure summary (via p4j's threadFailure plumbing) and the loop
+	// continues. This is the payoff of doing the errors[] check inside
+	// graphqlCall: addThread sees a normal error, no new plumbing needed.
+	results := []ghResult{
+		{out: []byte(`{"data":{"repository":{"pullRequest":{"id":"PR_X"}}}}`)},
+		{out: []byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_X"}}}}`)},
+		{out: []byte(`{"data":{"addPullRequestReviewThread":{"thread":{}}}}`)},
+		{out: []byte(`{"data":null,"errors":[{"message":"Resource not accessible by integration"}]}`)},
+		{out: []byte(`{"data":{"submitPullRequestReview":{"pullRequestReview":{"url":"https://github.com/o/r/pull/42#pullrequestreview-7"}}}}`)},
+	}
+	scriptedGHResults(t, results)
+
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf}
+	target := review.ReviewTarget{Owner: "owner", Repo: "repo", Number: 42, HeadSHA: "sha"}
+	findings := []review.Finding{
+		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T1", SuggestedComment: "C1"},
+		{File: "b.go", Line: 2, Severity: review.SeverityHigh, Title: "T2", SuggestedComment: "C2"},
+	}
+
+	if err := p.Submit(context.Background(), target, findings); err != nil {
+		t.Fatalf("Submit: expected nil on partial success, got %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Posted: 1/2") {
+		t.Errorf("summary should show 1/2 posted; got:\n%s", out)
+	}
+	if !strings.Contains(out, "b.go:2") {
+		t.Errorf("failed finding location missing from summary; got:\n%s", out)
+	}
+	if !strings.Contains(out, "graphql:") {
+		t.Errorf("body-error failure should carry the 'graphql:' prefix; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Resource not accessible by integration") {
+		t.Errorf("body-error message should appear in summary; got:\n%s", out)
 	}
 }
 
