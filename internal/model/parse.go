@@ -12,7 +12,7 @@ import (
 // Kind narrows the cause for actionable error messages; Raw is a
 // truncated copy of the offending output for debug surfaces.
 type ParseError struct {
-	Kind  string // "markdown_fence" | "prose_preamble" | "invalid_json"
+	Kind  string // "markdown_fence" | "prose_preamble" | "invalid_json" | "wrong_shape"
 	Raw   string
 	Cause error
 }
@@ -41,8 +41,14 @@ func ParseFindings(raw []byte) ([]review.FindingCandidate, error) {
 		return nil, &ParseError{Kind: "prose_preamble", Raw: truncate(trimmed, 200)}
 	}
 
+	// Findings is a pointer so we can distinguish "key missing" (nil
+	// pointer) from "key present, value []" (non-nil pointer to empty
+	// slice). Without this, well-formed JSON like {"foo":"bar"} or
+	// {"type":"result",...} would silently parse to an empty findings
+	// slice and the adapter would report a successful zero-finding
+	// review — the worst class of bug for a review tool.
 	var envelope struct {
-		Findings []review.FindingCandidate `json:"findings"`
+		Findings *[]review.FindingCandidate `json:"findings"`
 	}
 	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
 		return nil, &ParseError{
@@ -51,7 +57,13 @@ func ParseFindings(raw []byte) ([]review.FindingCandidate, error) {
 			Cause: err,
 		}
 	}
-	return envelope.Findings, nil
+	if envelope.Findings == nil {
+		return nil, &ParseError{
+			Kind: "wrong_shape",
+			Raw:  truncate(trimmed, 200),
+		}
+	}
+	return *envelope.Findings, nil
 }
 
 func truncate(s string, n int) string {

@@ -79,7 +79,7 @@ func TestReviewSuccess(t *testing.T) {
 		if name != "claude" {
 			t.Errorf("called %q, want claude", name)
 		}
-		expectedArgs := []string{"--print", "--output-format=json"}
+		expectedArgs := []string{"--print", "--output-format=text"}
 		if len(args) != len(expectedArgs) {
 			t.Errorf("got %d args, want %d", len(args), len(expectedArgs))
 		}

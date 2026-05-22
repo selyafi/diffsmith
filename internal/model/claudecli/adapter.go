@@ -1,5 +1,5 @@
 // Package claudecli implements the Claude model adapter via `claude --print
-// --output-format=json`. Prompts are piped via stdin per ADR 0007.
+// --output-format=text`. Prompts are piped via stdin per ADR 0007.
 package claudecli
 
 import (
@@ -52,8 +52,16 @@ func (a *Adapter) Preflight(_ context.Context) error {
 	return nil
 }
 
-// Review invokes claude with --print --output-format=json. Stdin piping,
-// output parsing and validation are built-in to the Claude CLI.
+// Review invokes claude with --print --output-format=text. Stdin piping,
+// JSON shape, and validation are prompt-engineered (see prompt-contract.md):
+// the model is instructed to emit a {"findings":[...]} JSON object as its
+// entire response, so text mode returns exactly that.
+//
+// We deliberately do NOT use --output-format=json, which returns a JSON
+// array of event records ({"type":"system",...}, {"type":"assistant",...},
+// {"type":"result","result":"<model text>",...}). That envelope would have
+// to be unwrapped before parsing; text mode skips that step. Verified via
+// spike M7a-followup (diffsmith-e2w).
 func (a *Adapter) Review(ctx context.Context, input *review.ReviewInput) (*review.ModelReviewResult, error) {
 	prompt := model.BuildPrompt(input)
 	if len(prompt) > DefaultInputBudgetBytes {
@@ -61,7 +69,7 @@ func (a *Adapter) Review(ctx context.Context, input *review.ReviewInput) (*revie
 			len(prompt), DefaultInputBudgetBytes, a.Name())
 	}
 
-	out, err := a.run(ctx, strings.NewReader(prompt), "claude", "--print", "--output-format=json")
+	out, err := a.run(ctx, strings.NewReader(prompt), "claude", "--print", "--output-format=text")
 	if err != nil {
 		return nil, fmt.Errorf("claude: %w", err)
 	}

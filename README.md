@@ -32,7 +32,7 @@ diffsmith review <github-pr-url|gitlab-mr-url> --model claude
 diffsmith review <github-pr-url|gitlab-mr-url> --model antigravity   # experimental in v1
 ```
 
-V1 supports `codex` and `claude` as fully tested adapters. `antigravity` (CLI binary: `agy`) is experimental in v1 and may fail with a clear "adapter spike required" message until its invocation spike closes.
+V1 supports `codex` and `claude` as fully tested adapters. `antigravity` (CLI binary: `agy`) is experimental in v1 and is currently disabled: running `--model antigravity` returns a clear actionable error because the `agy` CLI has no non-interactive auth path. See `internal/model/antigravitycli/doc.go` for details.
 
 ## V1 Dependencies
 
@@ -43,7 +43,8 @@ For repository access:
 
 For AI review:
 
-- `codex`, `claude`, or `agy` (Antigravity) CLI, depending on `--model`
+- `codex` or `claude` CLI, depending on `--model`
+- (`agy` for Antigravity is not a supported install path in v1; the adapter ships disabled — see "Intended V1 Command" above)
 
 ## V1 Workflow
 

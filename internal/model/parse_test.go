@@ -91,3 +91,67 @@ func TestParseFindingsToleratesLeadingWhitespace(t *testing.T) {
 		t.Errorf("leading whitespace should be tolerated: %v", err)
 	}
 }
+
+// TestParseFindingsRejectsMissingFindingsKey guards against silent failure
+// when the model emits a structurally different JSON object. Without this
+// check, json.Unmarshal happily produces a zero-value Findings slice and
+// the adapter reports zero findings as if the review succeeded.
+func TestParseFindingsRejectsMissingFindingsKey(t *testing.T) {
+	raw := []byte(`{"foo":"bar"}`)
+	_, err := ParseFindings(raw)
+	var pe *ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *ParseError, got %T: %v", err, err)
+	}
+	if pe.Kind != "wrong_shape" {
+		t.Errorf("Kind: got %q, want wrong_shape", pe.Kind)
+	}
+}
+
+// TestParseFindingsRejectsClaudeEnvelope guards against the specific
+// real-world shape that motivated this hardening (diffsmith-e2w):
+// `claude --output-format=json` emits result-event records. The flag
+// fix in diffsmith-e2w prevents this output from reaching the parser
+// today, but if a future adapter regresses on the flag the parser must
+// not silently swallow the failure.
+func TestParseFindingsRejectsClaudeEnvelope(t *testing.T) {
+	raw := []byte(`{"type":"result","subtype":"success","result":"{\"findings\":[]}","session_id":"abc"}`)
+	_, err := ParseFindings(raw)
+	var pe *ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *ParseError, got %T: %v", err, err)
+	}
+	if pe.Kind != "wrong_shape" {
+		t.Errorf("Kind: got %q, want wrong_shape", pe.Kind)
+	}
+}
+
+// TestParseFindingsRejectsAlternativeKey guards against prompt drift or
+// model behavior change in which the model returns the right structure
+// under a different top-level key (e.g. "comments" instead of "findings").
+func TestParseFindingsRejectsAlternativeKey(t *testing.T) {
+	raw := []byte(`{"comments":[{"file":"x.go","line":1,"severity":"low"}]}`)
+	_, err := ParseFindings(raw)
+	var pe *ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *ParseError, got %T: %v", err, err)
+	}
+	if pe.Kind != "wrong_shape" {
+		t.Errorf("Kind: got %q, want wrong_shape", pe.Kind)
+	}
+}
+
+// TestParseFindingsRejectsNullFindings guards against an explicit JSON
+// null where the array is expected. null is not the same as [] — it
+// signals a model that built the object incorrectly, not an empty review.
+func TestParseFindingsRejectsNullFindings(t *testing.T) {
+	raw := []byte(`{"findings":null}`)
+	_, err := ParseFindings(raw)
+	var pe *ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *ParseError, got %T: %v", err, err)
+	}
+	if pe.Kind != "wrong_shape" {
+		t.Errorf("Kind: got %q, want wrong_shape", pe.Kind)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/selyafi/diffsmith/internal/model"
+	"github.com/selyafi/diffsmith/internal/model/antigravitycli"
 	"github.com/selyafi/diffsmith/internal/model/claudecli"
 	"github.com/selyafi/diffsmith/internal/model/codexcli"
 	"github.com/selyafi/diffsmith/internal/provider"
@@ -33,13 +34,16 @@ func defaultRegistry() *provider.Registry {
 	return provider.NewRegistry(githubgh.New(nil), gitlabglab.New(nil))
 }
 
-// defaultModels returns the model registry wired to real CLIs. Claude
-// and Antigravity (agy) land in M7; Antigravity is experimental until
-// spike S8b closes.
+// defaultModels returns the model registry wired to real CLIs. Codex
+// and Claude are required v1 adapters. Antigravity (agy) is registered
+// so `--model antigravity` surfaces the actionable Preflight error from
+// spike S8b instead of an "unknown model" CLI error; the adapter itself
+// refuses to run because agy has no non-interactive auth path in v1.
 func defaultModels() map[string]model.Model {
 	return map[string]model.Model{
-		"codex":  codexcli.New(nil),
-		"claude": claudecli.New(nil),
+		"codex":       codexcli.New(nil),
+		"claude":      claudecli.New(nil),
+		"antigravity": antigravitycli.New(nil),
 	}
 }
 
