@@ -49,7 +49,7 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 		},
 	}
 
-	cmd.Flags().StringVar(&flags.model, "model", "codex", "model adapter to use (codex)")
+	cmd.Flags().StringVar(&flags.model, "model", "codex", "model adapter to use (codex, claude)")
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "fetch and normalize the diff, then stop before the model call")
 	cmd.Flags().BoolVar(&flags.printPrompt, "print-prompt", false, "print the model prompt and exit without invoking the model")
 	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print the GraphQL payload(s) for findings marked with 'p' in the TUI, instead of posting upstream")
@@ -88,7 +88,7 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 
 	m, ok := models[flags.model]
 	if !ok {
-		return fmt.Errorf("unknown model %q (supported: codex)", flags.model)
+		return fmt.Errorf("unknown model %q (supported: codex, claude)", flags.model)
 	}
 	if err := m.Preflight(ctx); err != nil {
 		return err

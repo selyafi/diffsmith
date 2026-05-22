@@ -5,6 +5,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/selyafi/diffsmith/internal/model"
+	"github.com/selyafi/diffsmith/internal/model/claudecli"
 	"github.com/selyafi/diffsmith/internal/model/codexcli"
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/provider/githubgh"
@@ -32,11 +33,12 @@ func defaultRegistry() *provider.Registry {
 	return provider.NewRegistry(githubgh.New(nil), gitlabglab.New(nil))
 }
 
-// defaultModels returns the model registry wired to real CLIs. Only
-// Codex is supported in M3b; Claude and Gemini land in M7.
+// defaultModels returns the model registry wired to real CLIs. Claude
+// and Gemini land in M7; Gemini is experimental until spike S8 closes.
 func defaultModels() map[string]model.Model {
 	return map[string]model.Model{
-		"codex": codexcli.New(nil),
+		"codex":  codexcli.New(nil),
+		"claude": claudecli.New(nil),
 	}
 }
 
