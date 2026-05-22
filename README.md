@@ -29,10 +29,10 @@ Most AI review tools fail by posting noisy comments directly into pull requests.
 ```sh
 diffsmith review <github-pr-url|gitlab-mr-url> --model codex
 diffsmith review <github-pr-url|gitlab-mr-url> --model claude
-diffsmith review <github-pr-url|gitlab-mr-url> --model gemini   # experimental in v1
+diffsmith review <github-pr-url|gitlab-mr-url> --model antigravity   # experimental in v1
 ```
 
-V1 supports `codex` and `claude` as fully tested adapters. `gemini` is experimental in v1 and may fail with a clear "adapter spike required" message until its invocation spike closes.
+V1 supports `codex` and `claude` as fully tested adapters. `antigravity` (CLI binary: `agy`) is experimental in v1 and may fail with a clear "adapter spike required" message until its invocation spike closes.
 
 ## V1 Dependencies
 
@@ -43,7 +43,7 @@ For repository access:
 
 For AI review:
 
-- `codex`, `claude`, or `gemini` CLI, depending on `--model`
+- `codex`, `claude`, or `agy` (Antigravity) CLI, depending on `--model`
 
 ## V1 Workflow
 

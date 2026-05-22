@@ -34,7 +34,8 @@ func defaultRegistry() *provider.Registry {
 }
 
 // defaultModels returns the model registry wired to real CLIs. Claude
-// and Gemini land in M7; Gemini is experimental until spike S8 closes.
+// and Antigravity (agy) land in M7; Antigravity is experimental until
+// spike S8b closes.
 func defaultModels() map[string]model.Model {
 	return map[string]model.Model{
 		"codex":  codexcli.New(nil),
