@@ -21,8 +21,8 @@ build: ## Build the diffsmith binary into ./bin/ (stamps version via -ldflags).
 version: build ## Print the stamped version of the just-built binary.
 	@$(BIN_DIR)/$(BINARY) --version
 
-test: ## Run unit tests.
-	go test $(PKG)
+test: ## Run unit tests with the race detector. CI uses this target.
+	go test -race $(PKG)
 
 lint: ## Run golangci-lint (install: https://golangci-lint.run/).
 	golangci-lint run $(PKG)
