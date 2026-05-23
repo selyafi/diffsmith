@@ -3,7 +3,7 @@
 package tui
 
 import (
-	"fmt"
+	"github.com/charmbracelet/bubbles/textarea"
 
 	"github.com/selyafi/diffsmith/internal/review"
 )
@@ -14,39 +14,55 @@ import (
 // the validated finding contract stays unchanged. Approval (State) and
 // post-intent are orthogonal: the user can approve without posting (for
 // the M5a clipboard workflow), post without approving, or both.
+//
+// editMode + editor implement F9's "edit the suggested comment" contract
+// (diffsmith-axv). When editMode is true the textarea owns key input; the
+// normal-mode key bindings resume on exit.
 type Model struct {
 	findings      []review.Finding
 	selected      int
 	markedForPost map[int]bool
+
+	editMode bool
+	editor   textarea.Model
 }
 
 // NewModel constructs a TUI Model with the given findings.
 func NewModel(findings []review.Finding) *Model {
-	return &Model{findings: findings}
+	ta := textarea.New()
+	ta.Prompt = ""
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 5000
+	ta.SetWidth(58)
+	ta.SetHeight(8)
+	return &Model{findings: findings, editor: ta}
 }
 
-// View renders the TUI as a string.
-func (m *Model) View() string {
-	if len(m.findings) == 0 {
-		return "No findings to review.\n"
+// EditMode reports whether the model is currently in edit mode. Tests
+// and the View consult this to gate behavior.
+func (m *Model) EditMode() bool { return m.editMode }
+
+// enterEditMode loads the current finding's suggested_comment into the
+// textarea and focuses it. No-op if no finding is selected.
+func (m *Model) enterEditMode() {
+	cur := m.CurrentFinding()
+	if cur == nil {
+		return
 	}
+	m.editor.SetValue(cur.SuggestedComment)
+	m.editor.Focus()
+	m.editMode = true
+}
 
-	var out string
-	out += fmt.Sprintf("Diffsmith Review (%d findings)\n", len(m.findings))
-	out += "──────────────────────────────\n\n"
-
-	for i, f := range m.findings {
-		marker := " "
-		if i == m.selected {
-			marker = ">"
+// exitEditMode leaves edit mode. If save is true the textarea's current
+// value replaces the finding's SuggestedComment; otherwise the change is
+// discarded.
+func (m *Model) exitEditMode(save bool) {
+	if save {
+		if cur := m.CurrentFinding(); cur != nil {
+			cur.SuggestedComment = m.editor.Value()
 		}
-		out += fmt.Sprintf("%s [%d] %s:%d\n", marker, i+1, f.File, f.Line)
-		out += fmt.Sprintf("  %s (%s, %.0f%%)\n", f.Title, f.Severity, f.Confidence*100)
-		out += "\n"
 	}
-
-	out += "──────────────────────────────\n"
-	out += "Navigate: ↑↓  |  Select: Enter  |  Quit: q\n"
-
-	return out
+	m.editor.Blur()
+	m.editMode = false
 }

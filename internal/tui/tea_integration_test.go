@@ -48,13 +48,16 @@ func TestProgramRunRendersAndQuits(t *testing.T) {
 	}
 }
 
-// TestInitReturnsNilCmd verifies Init returns no initial command.
-func TestInitReturnsNilCmd(t *testing.T) {
+// TestInitReturnsBlinkCmd verifies Init returns the textarea blink command
+// so the cursor animates when edit mode is entered. Before
+// diffsmith-axv (F8/F9 fix) Init returned nil; the textarea dependency
+// added for edit-mode editing requires the Blink tick to drive the cursor.
+func TestInitReturnsBlinkCmd(t *testing.T) {
 	m := NewModel([]review.Finding{
 		{File: "test.go", Line: 1, Severity: review.SeverityHigh, Title: "Test", Model: "test", Confidence: 0.5},
 	})
-	if cmd := m.Init(); cmd != nil {
-		t.Errorf("Init() should return nil, got %v", cmd)
+	if cmd := m.Init(); cmd == nil {
+		t.Error("Init() should return the textarea blink command, got nil")
 	}
 }
 

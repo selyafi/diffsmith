@@ -119,7 +119,7 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 		}
 	}
 
-	writeFindings(cmd.OutOrStdout(), tm.GetApprovedFindings(), quarantined)
+	writeFindings(cmd.OutOrStdout(), tm.GetApprovedFindings(), quarantined, len(valid))
 	return nil
 }
 
@@ -141,10 +141,18 @@ func confirmPost(cmd *cobra.Command, n, prNumber int) bool {
 }
 
 // writeFindings renders the post-TUI summary so approved findings can be
-// piped or captured by non-interactive consumers.
-func writeFindings(w io.Writer, valid []review.Finding, quarantined []review.Quarantined) {
-	if len(valid) == 0 && len(quarantined) == 0 {
+// piped or captured by non-interactive consumers. totalReviewed is the
+// number of findings the user saw in the TUI (after validation): when it's
+// zero, the model genuinely returned nothing; when it's non-zero but
+// `valid` is empty, the user approved none — those two cases need
+// different copy so a reviewer can tell them apart (per diffsmith-14p).
+func writeFindings(w io.Writer, valid []review.Finding, quarantined []review.Quarantined, totalReviewed int) {
+	if totalReviewed == 0 && len(quarantined) == 0 {
 		fmt.Fprintln(w, "No findings.")
+		return
+	}
+	if len(valid) == 0 && len(quarantined) == 0 {
+		fmt.Fprintf(w, "0 of %d findings approved.\n", totalReviewed)
 		return
 	}
 	for _, f := range valid {

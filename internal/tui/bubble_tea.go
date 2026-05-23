@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/selyafi/diffsmith/internal/clipboard"
@@ -19,29 +20,51 @@ func Run(m *Model) error {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return nil
+	return textarea.Blink
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok {
+	key, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+
+	// Edit mode: the textarea owns most key input. Only esc (cancel) and
+	// ctrl+s (save) toggle back to normal mode.
+	if m.editMode {
 		switch key.String() {
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "down", "j":
-			m.MoveDown()
-		case "up", "k":
-			m.MoveUp()
-		case "a":
-			m.ApproveCurrent()
-		case "d":
-			m.DismissCurrent()
-		case "c":
-			if cur := m.CurrentFinding(); cur != nil {
-				_ = copyToClipboard(cur.SuggestedComment)
-			}
-		case "p":
-			m.MarkCurrentForPost()
+		case "esc":
+			m.exitEditMode(false)
+			return m, nil
+		case "ctrl+s":
+			m.exitEditMode(true)
+			return m, nil
 		}
+		var cmd tea.Cmd
+		m.editor, cmd = m.editor.Update(msg)
+		return m, cmd
+	}
+
+	// Normal mode.
+	switch key.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "down", "j":
+		m.MoveDown()
+	case "up", "k":
+		m.MoveUp()
+	case "a":
+		m.ApproveCurrent()
+	case "d":
+		m.DismissCurrent()
+	case "c":
+		if cur := m.CurrentFinding(); cur != nil {
+			_ = copyToClipboard(cur.SuggestedComment)
+		}
+	case "p":
+		m.MarkCurrentForPost()
+	case "e":
+		m.enterEditMode()
 	}
 	return m, nil
 }
