@@ -10,7 +10,7 @@ Diffsmith has no server. The selected model CLI may still send diffs to its own 
 
 ## Current Status
 
-Design draft for v1. No implementation yet.
+v0.1.0 release-prep (M8). The product is built end-to-end: GitHub + GitLab providers, Codex + Claude model adapters, three-pane TUI, clipboard/export, optional posting seam, prompt-injection-resilient parser. Acceptance happy-path runs against live PRs/MRs and clean-machine install verification remain before tagging. See [CHANGELOG.md](CHANGELOG.md) for the v0.1.0 release notes draft.
 
 ## Product Thesis
 
@@ -84,3 +84,7 @@ For AI review:
 - [Local Notes](docs/NOTES.md)
 - [Decisions](docs/decisions)
 - [Dev Plan](docs/dev-plan)
+
+## License
+
+MIT — see [LICENSE](LICENSE). Diffsmith bundles no third-party code under a different license; runtime dependencies are listed in `go.mod`.

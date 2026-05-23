@@ -1,0 +1,45 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    name: goreleaser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # GoReleaser needs the full history so `git describe` and the
+          # version derivation work.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      # CHANGELOG.md is the authoritative source for release notes per
+      # `docs/dev-plan/release-plan.md` § Release Notes Shape. Extract
+      # just the most recent version section so the GitHub Release body
+      # doesn't include the entire history.
+      - name: Extract this release's notes from CHANGELOG.md
+        run: |
+          awk '/^## /{n++; if(n>1) exit} n==1' CHANGELOG.md > RELEASE_NOTES.md
+          test -s RELEASE_NOTES.md  # fail loudly if extraction produced nothing
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean --release-notes=RELEASE_NOTES.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

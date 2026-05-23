@@ -13,6 +13,20 @@ import (
 	"github.com/selyafi/diffsmith/internal/provider/gitlabglab"
 )
 
+// version is set via SetVersion from main at startup. The literal "dev"
+// is the local-build sentinel; the release workflow stamps the real tag
+// via -ldflags (see Makefile).
+var version = "dev"
+
+// SetVersion lets cmd/diffsmith inject the build-stamped version string
+// before Execute runs. Keeping the seam in the app package means tests
+// can override the version without touching the main package.
+func SetVersion(v string) {
+	if v != "" {
+		version = v
+	}
+}
+
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "diffsmith",
@@ -20,6 +34,7 @@ func newRootCmd() *cobra.Command {
 		Long: "Diffsmith fetches a pull or merge request diff, asks a selected AI CLI to draft\n" +
 			"review findings, validates them against the diff, and opens a terminal UI where\n" +
 			"you inspect, edit, approve, dismiss, and copy comments. Diffsmith never posts.",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

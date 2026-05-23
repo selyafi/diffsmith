@@ -1,0 +1,63 @@
+# GoReleaser configuration for Diffsmith.
+#
+# Triggered by `.github/workflows/release.yml` on pushes of tags matching
+# `v*.*.*`. Produces the artifacts listed in
+# `docs/dev-plan/release-plan.md` § Release Artifacts: per-platform
+# tarballs, a SHA256SUMS file, and a GitHub Release.
+#
+# Schema version pinned per goreleaser-action v6 default. To validate
+# locally before tagging: `goreleaser check`.
+
+version: 2
+
+project_name: diffsmith
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: diffsmith
+    main: ./cmd/diffsmith
+    binary: diffsmith
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # Per `release-plan.md` § Release Channels, v1 ships macOS arm64,
+    # macOS amd64, and Linux amd64. Linux arm64 is excluded until there is
+    # a tested install path for it.
+    ignore:
+      - goos: linux
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - CHANGELOG.md
+      - LICENSE*
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+# Each release's notes are read from `CHANGELOG.md` by the workflow via
+# `goreleaser release --release-notes`. The auto-generated changelog
+# section here is suppressed so we don't get two changelogs in the body.
+changelog:
+  disable: true
+
+release:
+  draft: false
+  prerelease: auto
+  name_template: "{{ .ProjectName }} {{ .Version }}"
