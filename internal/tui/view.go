@@ -76,7 +76,14 @@ var (
 // pane swaps to the textarea when editMode is true (PRD F9).
 func (m *Model) View() string {
 	if len(m.findings) == 0 {
-		return "No findings to review.\n"
+		// The empty TUI still launches in the loader-driven flow (the
+		// pipeline succeeded; the model just returned nothing). Without
+		// a quit hint a first-time user has no signal that they need to
+		// press q to exit — surface it explicitly.
+		return lipgloss.JoinVertical(lipgloss.Left,
+			loaderStyle.Render("\n  No findings to review.\n"),
+			footerStyle.Render("q quit"),
+		)
 	}
 
 	title := titleStyle.Render(fmt.Sprintf(
