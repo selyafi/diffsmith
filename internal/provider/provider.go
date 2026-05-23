@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"time"
 
 	"github.com/selyafi/diffsmith/internal/review"
 )
@@ -15,4 +16,24 @@ type Provider interface {
 	Supports(rawURL string) bool
 	Preflight(ctx context.Context) error
 	Fetch(ctx context.Context, rawURL string) (*review.ReviewInput, error)
+}
+
+// RepoCoord identifies a repository hosted on a Git forge. Used by the
+// inbox flow to enumerate PRs/MRs for a specific repo without first
+// constructing a URL.
+type RepoCoord struct {
+	Host  string // "github.com", "gitlab.com", "gitlab.example.com"
+	Owner string // "selyafi" or "my-group/sub-group" (GitLab nested)
+	Name  string // "diffsmith"
+}
+
+// PRSummary is one row in the inbox list. URL is the only field the
+// review pipeline strictly needs; the rest are display-only.
+type PRSummary struct {
+	Number    int
+	Title     string
+	Author    string
+	URL       string      // canonical, ready to hand to runReview
+	UpdatedAt time.Time
+	Draft     bool
 }
