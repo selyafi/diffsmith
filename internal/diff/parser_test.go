@@ -49,6 +49,47 @@ func TestParseModifiedSimple(t *testing.T) {
 	}
 }
 
+// TestParseRealGitHubPR exercises the parser against a real `gh pr diff
+// --patch` capture (cli/cli#13491, 7 workflow files, ~10 KB). The fixture
+// preserves the git-format-patch headers ("From <sha>... Subject:...") that
+// gh emits in --patch mode, which the synthetic fixtures don't carry.
+// This is the M2-followup deliverable per spike S1: a captured real-PR
+// fixture so future regressions against real-world gh diff peculiarities
+// are caught hermetically. To refresh: re-run
+//
+//	gh pr diff https://github.com/cli/cli/pull/13491 --patch --color never > \
+//	  testdata/diffs/github_pr_cli_13491.diff
+func TestParseRealGitHubPR(t *testing.T) {
+	raw := readFixture(t, "github_pr_cli_13491.diff")
+
+	files, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got, want := len(files), 7; got != want {
+		t.Fatalf("file count: got %d, want %d", got, want)
+	}
+
+	for _, f := range files {
+		if f.Kind != FileText {
+			t.Errorf("file %q: Kind = %v, want FileText", f.Path, f.Kind)
+		}
+	}
+
+	// Anchor one known path so a future fixture refresh against an
+	// unrelated PR doesn't silently pass with the wrong content.
+	var found bool
+	for _, f := range files {
+		if f.Path == ".github/workflows/codeql.yml" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected .github/workflows/codeql.yml in fixture; fixture may have been replaced")
+	}
+}
+
 func TestClassifyLineModifiedSimple(t *testing.T) {
 	raw := readFixture(t, "modified_simple.diff")
 	files, err := Parse(raw)

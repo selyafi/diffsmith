@@ -19,9 +19,14 @@ import (
 //go:embed schema.json
 var schemaJSON []byte
 
-// DefaultInputBudgetBytes caps the prompt size sent to codex. The value
-// is intentionally conservative for v1; spike S9 calibrates a real
-// number before M8 by measuring real public-PR diffs.
+// DefaultInputBudgetBytes caps the prompt size sent to codex. Calibrated
+// by spike S9 against 26 real public PRs (median 7.9 KB, max non-outlier
+// 47.4 KB, one 2.2 MB mega-PR rejected). 256 KB cleanly bisects: every
+// reviewable PR passes with a ~5x safety margin, unreviewable mega-PRs
+// fail with an actionable message. See docs/model-adapters.md § Diff Size
+// and Context Budget for the rationale; spikes/s9-input-budget/main.go is
+// the measurement tool — re-run when models change or the prompt scaffold
+// grows.
 const DefaultInputBudgetBytes = 256 * 1024
 
 // Adapter implements the model.Model interface against the Codex CLI.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/selyafi/diffsmith/internal/diff"
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/review"
 )
@@ -272,5 +273,96 @@ func TestAdapterFetchRejectsEmptySHA(t *testing.T) {
 	msg := err.Error()
 	if !strings.Contains(msg, "sha") {
 		t.Errorf("error must mention 'sha' to localise the cause; got: %v", err)
+	}
+}
+
+// readRealFixture loads one of the captured-real-glab fixtures alongside
+// synthetic.diff in testdata/. Used by the M6c followup tests below.
+func readRealFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	return data
+}
+
+// TestParseRealGitLabMRSingleGroup parses a captured `glab mr diff --raw`
+// body from gitlab-org/cli!3313 (single-group URL shape:
+// gitlab.com/<group>/<project>). The hermetic adapter tests above prove
+// the argv shape; this test proves the diff parser still consumes real
+// glab output, so a parser swap or library upgrade can't silently break
+// the single-group path. Pair with the nested-group test below.
+//
+// Refresh:
+//
+//	glab mr diff 3313 -R gitlab-org/cli --raw --color never > \
+//	  internal/provider/gitlabglab/testdata/gitlab_mr_cli_3313.diff
+func TestParseRealGitLabMRSingleGroup(t *testing.T) {
+	raw := readRealFixture(t, "gitlab_mr_cli_3313.diff")
+
+	files, err := diff.Parse(string(raw))
+	if err != nil {
+		t.Fatalf("diff.Parse: %v", err)
+	}
+	if got, want := len(files), 4; got != want {
+		t.Fatalf("file count: got %d, want %d", got, want)
+	}
+	for _, f := range files {
+		if f.Kind != diff.FileText {
+			t.Errorf("file %q: Kind = %v, want FileText", f.Path, f.Kind)
+		}
+	}
+	// Anchor one known path so a fixture replacement that targets a
+	// different MR fails loudly rather than silently passing with wrong
+	// content.
+	var found bool
+	for _, f := range files {
+		if f.Path == "internal/commands/update/check_update.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected internal/commands/update/check_update.go; fixture may have been replaced")
+	}
+}
+
+// TestParseRealGitLabMRNestedGroup mirrors the single-group test for a
+// nested-group URL: gitlab-org/cluster-integration/gitlab-agent!3650
+// (gitlab.com/<group>/<subgroup>/<project>). Diff content is independent
+// of URL shape so the two tests can drift apart without one masking
+// regressions in the other.
+//
+// Refresh:
+//
+//	glab mr diff 3650 -R gitlab-org/cluster-integration/gitlab-agent \
+//	  --raw --color never > \
+//	  internal/provider/gitlabglab/testdata/gitlab_mr_gitlab_agent_3650.diff
+func TestParseRealGitLabMRNestedGroup(t *testing.T) {
+	raw := readRealFixture(t, "gitlab_mr_gitlab_agent_3650.diff")
+
+	files, err := diff.Parse(string(raw))
+	if err != nil {
+		t.Fatalf("diff.Parse: %v", err)
+	}
+	if got, want := len(files), 5; got != want {
+		t.Fatalf("file count: got %d, want %d", got, want)
+	}
+	for _, f := range files {
+		if f.Kind != diff.FileText {
+			t.Errorf("file %q: Kind = %v, want FileText", f.Path, f.Kind)
+		}
+	}
+	var found bool
+	for _, f := range files {
+		if f.Path == "internal/module/autoflow/rpc/rpc.proto" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected internal/module/autoflow/rpc/rpc.proto; fixture may have been replaced")
 	}
 }

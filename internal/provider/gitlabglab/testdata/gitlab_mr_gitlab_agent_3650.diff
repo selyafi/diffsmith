@@ -1,0 +1,308 @@
+diff --git a/internal/module/autoflow/rpc/BUILD.bazel b/internal/module/autoflow/rpc/BUILD.bazel
+index a3859e203af6f0dafb8e99854d9fbe3546887a0a..d032041631bc88bc9183c4604d82ddcd6f21bab2 100644
+--- a/internal/module/autoflow/rpc/BUILD.bazel
++++ b/internal/module/autoflow/rpc/BUILD.bazel
+@@ -4,7 +4,6 @@ load("//build:proto.bzl", "go_grpc_generate")
+ go_grpc_generate(
+     src = "rpc.proto",
+     deps = [
+-        "//internal/module/autoflow/engine:proto",
+         "//pkg/event:proto",
+         "@protovalidate//proto/protovalidate/buf/validate:validate_proto",
+     ],
+@@ -19,7 +18,6 @@ go_library(
+     importpath = "gitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/module/autoflow/rpc",
+     visibility = ["//:__subpackages__"],
+     deps = [
+-        "//internal/module/autoflow/engine",
+         "//pkg/event",
+         "@build_buf_gen_go_bufbuild_protovalidate_protocolbuffers_go//buf/validate",
+         "@org_golang_google_grpc//:grpc",
+diff --git a/internal/module/autoflow/rpc/rpc.pb.go b/internal/module/autoflow/rpc/rpc.pb.go
+index 4d5b940bd0406981b7d4f92f69ac0766a6deeace..82ce6850e5d0b147783e5ec0a548a219b324e46b 100644
+--- a/internal/module/autoflow/rpc/rpc.pb.go
++++ b/internal/module/autoflow/rpc/rpc.pb.go
+@@ -12,7 +12,6 @@ import (
+ 	unsafe "unsafe"
+ 
+ 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
+-	engine "gitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/module/autoflow/engine"
+ 	event "gitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/pkg/event"
+ 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+ 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+@@ -125,7 +124,7 @@ type StartWorkflowRequest struct {
+ 	state              protoimpl.MessageState `protogen:"open.v1"`
+ 	IdentityKey        string                 `protobuf:"bytes,1,opt,name=identity_key,json=identityKey" json:"identity_key,omitempty"`
+ 	WorkflowDefinition []byte                 `protobuf:"bytes,2,opt,name=workflow_definition,json=workflowDefinition" json:"workflow_definition,omitempty"`
+-	Secrets            []*engine.Secret       `protobuf:"bytes,3,rep,name=secrets" json:"secrets,omitempty"`
++	Secrets            []*Secret              `protobuf:"bytes,3,rep,name=secrets" json:"secrets,omitempty"`
+ 	unknownFields      protoimpl.UnknownFields
+ 	sizeCache          protoimpl.SizeCache
+ }
+@@ -174,13 +173,65 @@ func (x *StartWorkflowRequest) GetWorkflowDefinition() []byte {
+ 	return nil
+ }
+ 
+-func (x *StartWorkflowRequest) GetSecrets() []*engine.Secret {
++func (x *StartWorkflowRequest) GetSecrets() []*Secret {
+ 	if x != nil {
+ 		return x.Secrets
+ 	}
+ 	return nil
+ }
+ 
++type Secret struct {
++	state         protoimpl.MessageState `protogen:"open.v1"`
++	Key           string                 `protobuf:"bytes,1,opt,name=key" json:"key,omitempty"`
++	Value         string                 `protobuf:"bytes,2,opt,name=value" json:"value,omitempty"`
++	unknownFields protoimpl.UnknownFields
++	sizeCache     protoimpl.SizeCache
++}
++
++func (x *Secret) Reset() {
++	*x = Secret{}
++	mi := &file_internal_module_autoflow_rpc_rpc_proto_msgTypes[3]
++	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
++	ms.StoreMessageInfo(mi)
++}
++
++func (x *Secret) String() string {
++	return protoimpl.X.MessageStringOf(x)
++}
++
++func (*Secret) ProtoMessage() {}
++
++func (x *Secret) ProtoReflect() protoreflect.Message {
++	mi := &file_internal_module_autoflow_rpc_rpc_proto_msgTypes[3]
++	if x != nil {
++		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
++		if ms.LoadMessageInfo() == nil {
++			ms.StoreMessageInfo(mi)
++		}
++		return ms
++	}
++	return mi.MessageOf(x)
++}
++
++// Deprecated: Use Secret.ProtoReflect.Descriptor instead.
++func (*Secret) Descriptor() ([]byte, []int) {
++	return file_internal_module_autoflow_rpc_rpc_proto_rawDescGZIP(), []int{3}
++}
++
++func (x *Secret) GetKey() string {
++	if x != nil {
++		return x.Key
++	}
++	return ""
++}
++
++func (x *Secret) GetValue() string {
++	if x != nil {
++		return x.Value
++	}
++	return ""
++}
++
+ type StartWorkflowResponse struct {
+ 	state         protoimpl.MessageState `protogen:"open.v1"`
+ 	WorkflowId    string                 `protobuf:"bytes,1,opt,name=workflow_id" json:"workflow_id,omitempty"`
+@@ -190,7 +241,7 @@ type StartWorkflowResponse struct {
+ 
+ func (x *StartWorkflowResponse) Reset() {
+ 	*x = StartWorkflowResponse{}
+-	mi := &file_internal_module_autoflow_rpc_rpc_proto_msgTypes[3]
++	mi := &file_internal_module_autoflow_rpc_rpc_proto_msgTypes[4]
+ 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+ 	ms.StoreMessageInfo(mi)
+ }
+@@ -202,7 +253,7 @@ func (x *StartWorkflowResponse) String() string {
+ func (*StartWorkflowResponse) ProtoMessage() {}
+ 
+ func (x *StartWorkflowResponse) ProtoReflect() protoreflect.Message {
+-	mi := &file_internal_module_autoflow_rpc_rpc_proto_msgTypes[3]
++	mi := &file_internal_module_autoflow_rpc_rpc_proto_msgTypes[4]
+ 	if x != nil {
+ 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+ 		if ms.LoadMessageInfo() == nil {
+@@ -215,7 +266,7 @@ func (x *StartWorkflowResponse) ProtoReflect() protoreflect.Message {
+ 
+ // Deprecated: Use StartWorkflowResponse.ProtoReflect.Descriptor instead.
+ func (*StartWorkflowResponse) Descriptor() ([]byte, []int) {
+-	return file_internal_module_autoflow_rpc_rpc_proto_rawDescGZIP(), []int{3}
++	return file_internal_module_autoflow_rpc_rpc_proto_rawDescGZIP(), []int{4}
+ }
+ 
+ func (x *StartWorkflowResponse) GetWorkflowId() string {
+@@ -229,7 +280,7 @@ var File_internal_module_autoflow_rpc_rpc_proto protoreflect.FileDescriptor
+ 
+ const file_internal_module_autoflow_rpc_rpc_proto_rawDesc = "" +
+ 	"\n" +
+-	"&internal/module/autoflow/rpc/rpc.proto\x12\x19gitlab.agent.autoflow.rpc\x1a\x1bbuf/validate/validate.proto\x1a,internal/module/autoflow/engine/engine.proto\x1a\x15pkg/event/event.proto\"\xb2\x02\n" +
++	"&internal/module/autoflow/rpc/rpc.proto\x12\x19gitlab.agent.autoflow.rpc\x1a\x1bbuf/validate/validate.proto\x1a\x15pkg/event/event.proto\"\xb2\x02\n" +
+ 	"\x11CloudEventRequest\x12<\n" +
+ 	"\x05event\x18\x01 \x01(\v2\x1e.gitlab.agent.event.CloudEventB\x06\xbaH\x03\xc8\x01\x01R\x05event\x12F\n" +
+ 	"\fflow_project\x18\x02 \x01(\v2\x1b.gitlab.agent.event.ProjectB\x06\xbaH\x03\xc8\x01\x01R\vflowProject\x12Y\n" +
+@@ -237,12 +288,17 @@ const file_internal_module_autoflow_rpc_rpc_proto_rawDesc = "" +
+ 	"\x0eVariablesEntry\x12\x10\n" +
+ 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+ 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x14\n" +
+-	"\x12CloudEventResponse\"\xcd\x01\n" +
++	"\x12CloudEventResponse\"\xca\x01\n" +
+ 	"\x14StartWorkflowRequest\x12-\n" +
+ 	"\fidentity_key\x18\x01 \x01(\tB\n" +
+ 	"\xbaH\ar\x05 \x01(\xff\x01R\videntityKey\x12<\n" +
+-	"\x13workflow_definition\x18\x02 \x01(\fB\v\xbaH\bz\x06\x10\x01\x18\x80\xa0\x06R\x12workflowDefinition\x12H\n" +
+-	"\asecrets\x18\x03 \x03(\v2$.gitlab.agent.autoflow.engine.SecretB\b\xbaH\x05\x92\x01\x02\x10 R\asecrets\"9\n" +
++	"\x13workflow_definition\x18\x02 \x01(\fB\v\xbaH\bz\x06\x10\x01\x18\x80\xa0\x06R\x12workflowDefinition\x12E\n" +
++	"\asecrets\x18\x03 \x03(\v2!.gitlab.agent.autoflow.rpc.SecretB\b\xbaH\x05\x92\x01\x02\x10 R\asecrets\"H\n" +
++	"\x06Secret\x12\x1c\n" +
++	"\x03key\x18\x01 \x01(\tB\n" +
++	"\xbaH\ar\x05 \x01(\xff\x01R\x03key\x12 \n" +
++	"\x05value\x18\x02 \x01(\tB\n" +
++	"\xbaH\ar\x05 \x01(\x80 R\x05value\"9\n" +
+ 	"\x15StartWorkflowResponse\x12 \n" +
+ 	"\vworkflow_id\x18\x01 \x01(\tR\vworkflow_id2\xed\x01\n" +
+ 	"\bAutoFlow\x12k\n" +
+@@ -262,26 +318,26 @@ func file_internal_module_autoflow_rpc_rpc_proto_rawDescGZIP() []byte {
+ 	return file_internal_module_autoflow_rpc_rpc_proto_rawDescData
+ }
+ 
+-var file_internal_module_autoflow_rpc_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
++var file_internal_module_autoflow_rpc_rpc_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+ var file_internal_module_autoflow_rpc_rpc_proto_goTypes = []any{
+ 	(*CloudEventRequest)(nil),     // 0: gitlab.agent.autoflow.rpc.CloudEventRequest
+ 	(*CloudEventResponse)(nil),    // 1: gitlab.agent.autoflow.rpc.CloudEventResponse
+ 	(*StartWorkflowRequest)(nil),  // 2: gitlab.agent.autoflow.rpc.StartWorkflowRequest
+-	(*StartWorkflowResponse)(nil), // 3: gitlab.agent.autoflow.rpc.StartWorkflowResponse
+-	nil,                           // 4: gitlab.agent.autoflow.rpc.CloudEventRequest.VariablesEntry
+-	(*event.CloudEvent)(nil),      // 5: gitlab.agent.event.CloudEvent
+-	(*event.Project)(nil),         // 6: gitlab.agent.event.Project
+-	(*engine.Secret)(nil),         // 7: gitlab.agent.autoflow.engine.Secret
++	(*Secret)(nil),                // 3: gitlab.agent.autoflow.rpc.Secret
++	(*StartWorkflowResponse)(nil), // 4: gitlab.agent.autoflow.rpc.StartWorkflowResponse
++	nil,                           // 5: gitlab.agent.autoflow.rpc.CloudEventRequest.VariablesEntry
++	(*event.CloudEvent)(nil),      // 6: gitlab.agent.event.CloudEvent
++	(*event.Project)(nil),         // 7: gitlab.agent.event.Project
+ }
+ var file_internal_module_autoflow_rpc_rpc_proto_depIdxs = []int32{
+-	5, // 0: gitlab.agent.autoflow.rpc.CloudEventRequest.event:type_name -> gitlab.agent.event.CloudEvent
+-	6, // 1: gitlab.agent.autoflow.rpc.CloudEventRequest.flow_project:type_name -> gitlab.agent.event.Project
+-	4, // 2: gitlab.agent.autoflow.rpc.CloudEventRequest.variables:type_name -> gitlab.agent.autoflow.rpc.CloudEventRequest.VariablesEntry
+-	7, // 3: gitlab.agent.autoflow.rpc.StartWorkflowRequest.secrets:type_name -> gitlab.agent.autoflow.engine.Secret
++	6, // 0: gitlab.agent.autoflow.rpc.CloudEventRequest.event:type_name -> gitlab.agent.event.CloudEvent
++	7, // 1: gitlab.agent.autoflow.rpc.CloudEventRequest.flow_project:type_name -> gitlab.agent.event.Project
++	5, // 2: gitlab.agent.autoflow.rpc.CloudEventRequest.variables:type_name -> gitlab.agent.autoflow.rpc.CloudEventRequest.VariablesEntry
++	3, // 3: gitlab.agent.autoflow.rpc.StartWorkflowRequest.secrets:type_name -> gitlab.agent.autoflow.rpc.Secret
+ 	0, // 4: gitlab.agent.autoflow.rpc.AutoFlow.CloudEvent:input_type -> gitlab.agent.autoflow.rpc.CloudEventRequest
+ 	2, // 5: gitlab.agent.autoflow.rpc.AutoFlow.StartWorkflow:input_type -> gitlab.agent.autoflow.rpc.StartWorkflowRequest
+ 	1, // 6: gitlab.agent.autoflow.rpc.AutoFlow.CloudEvent:output_type -> gitlab.agent.autoflow.rpc.CloudEventResponse
+-	3, // 7: gitlab.agent.autoflow.rpc.AutoFlow.StartWorkflow:output_type -> gitlab.agent.autoflow.rpc.StartWorkflowResponse
++	4, // 7: gitlab.agent.autoflow.rpc.AutoFlow.StartWorkflow:output_type -> gitlab.agent.autoflow.rpc.StartWorkflowResponse
+ 	6, // [6:8] is the sub-list for method output_type
+ 	4, // [4:6] is the sub-list for method input_type
+ 	4, // [4:4] is the sub-list for extension type_name
+@@ -300,7 +356,7 @@ func file_internal_module_autoflow_rpc_rpc_proto_init() {
+ 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
+ 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_module_autoflow_rpc_rpc_proto_rawDesc), len(file_internal_module_autoflow_rpc_rpc_proto_rawDesc)),
+ 			NumEnums:      0,
+-			NumMessages:   5,
++			NumMessages:   6,
+ 			NumExtensions: 0,
+ 			NumServices:   1,
+ 		},
+diff --git a/internal/module/autoflow/rpc/rpc.proto b/internal/module/autoflow/rpc/rpc.proto
+index 609fcc917ba2f506ae1cd4e8a332944305f97b33..8f71d0833990439a21967cf6491b7fb3d1a776fd 100644
+--- a/internal/module/autoflow/rpc/rpc.proto
++++ b/internal/module/autoflow/rpc/rpc.proto
+@@ -9,7 +9,6 @@ option ruby_package = "Gitlab::Agent::AutoFlow::Rpc";
+ option features.field_presence = IMPLICIT;
+ 
+ import "buf/validate/validate.proto";
+-import "internal/module/autoflow/engine/engine.proto";
+ import "pkg/event/event.proto";
+ 
+ message CloudEventRequest {
+@@ -39,15 +38,31 @@ message StartWorkflowRequest {
+     (buf.validate.field).bytes.min_len = 1,
+     (buf.validate.field).bytes.max_len = 102400  // 100 KiB
+   ];
+-  // Reusing engine.Secret (instead of map<string,string>) lets the server
+-  // pass the slice straight into RunStarlarkWorkflowInput without copying,
+-  // and matches the workflow input's repeated-field shape, which is required
+-  // for replay determinism (see engine.RunStarlarkWorkflowInput.secrets).
+-  repeated gitlab.agent.autoflow.engine.Secret secrets = 3 [
++  // repeated, not map<string,string>: the workflow body populates a Starlark
++  // dict from this slice on every replay, and `for k in w.secrets` must yield
++  // the same order each time or the replay diverges. Go map iteration order is
++  // non-deterministic, so map<> values would shuffle across replays after
++  // proto.Unmarshal. A repeated field preserves caller-controlled wire order
++  // through Marshal/Unmarshal, giving the workflow a stable iteration order.
++  repeated Secret secrets = 3 [
+     (buf.validate.field).repeated.max_items = 32
+   ];
+ }
+ 
++// Secret is a single (key, value) pair passed into a script-mode workflow.
++// Stored plaintext in the autocore workflow input and `WorkflowCreated`
++// history payload; treat as sensitive until Runner secret backends land.
++message Secret {
++  string key = 1 [
++    (buf.validate.field).string.min_bytes = 1,
++    (buf.validate.field).string.max_bytes = 255
++  ];
++  string value = 2 [
++    (buf.validate.field).string.min_bytes = 1,
++    (buf.validate.field).string.max_bytes = 4096  // 4 KiB
++  ];
++}
++
+ message StartWorkflowResponse {
+   // Server-assigned autocore WorkflowID (UUIDv7, opaque to caller).
+   string workflow_id = 1 [json_name = "workflow_id"];
+diff --git a/internal/module/autoflow/server/server.go b/internal/module/autoflow/server/server.go
+index 06722f6fdfbb295977f73c10760b03a71c24690c..f82b31a25d6772144f1ec0c81f292a1d5f77eb3b 100644
+--- a/internal/module/autoflow/server/server.go
++++ b/internal/module/autoflow/server/server.go
+@@ -34,9 +34,16 @@ func (s *server) CloudEvent(ctx context.Context, req *rpc.CloudEventRequest) (*r
+ }
+ 
+ func (s *server) StartWorkflow(ctx context.Context, req *rpc.StartWorkflowRequest) (*rpc.StartWorkflowResponse, error) {
++	secrets := make([]*engine.Secret, 0, len(req.Secrets))
++	for _, secret := range req.Secrets {
++		secrets = append(secrets, &engine.Secret{
++			Key:   secret.Key,
++			Value: secret.Value,
++		})
++	}
+ 	workflowID, err := s.flowEng.RunStarlark(ctx, req.IdentityKey, &engine.RunStarlarkWorkflowInput{
+ 		WorkflowDefinition: req.WorkflowDefinition,
+-		Secrets:            req.Secrets,
++		Secrets:            secrets,
+ 	})
+ 	if err != nil {
+ 		s.serverAPI.HandleProcessingError(ctx, s.log, "Error starting workflow", err, logz.IdentityKey(req.IdentityKey))
+diff --git a/pkg/ruby/lib/internal/module/autoflow/rpc/rpc_pb.rb b/pkg/ruby/lib/internal/module/autoflow/rpc/rpc_pb.rb
+index 767318bd597f170a725ec4eef2b5501b97900353..6a038ec2330b3009a03926b93b4d75a07f33b51f 100644
+--- a/pkg/ruby/lib/internal/module/autoflow/rpc/rpc_pb.rb
++++ b/pkg/ruby/lib/internal/module/autoflow/rpc/rpc_pb.rb
+@@ -5,11 +5,10 @@
+ require 'google/protobuf'
+ 
+ require 'buf/validate/validate_pb'
+-require 'internal/module/autoflow/engine/engine_pb'
+ require 'pkg/event/event_pb'
+ 
+ 
+-descriptor_data = "\n&internal/module/autoflow/rpc/rpc.proto\x12\x19gitlab.agent.autoflow.rpc\x1a\x1b\x62uf/validate/validate.proto\x1a,internal/module/autoflow/engine/engine.proto\x1a\x15pkg/event/event.proto\"\xb2\x02\n\x11\x43loudEventRequest\x12<\n\x05\x65vent\x18\x01 \x01(\x0b\x32\x1e.gitlab.agent.event.CloudEventB\x06\xbaH\x03\xc8\x01\x01R\x05\x65vent\x12\x46\n\x0c\x66low_project\x18\x02 \x01(\x0b\x32\x1b.gitlab.agent.event.ProjectB\x06\xbaH\x03\xc8\x01\x01R\x0b\x66lowProject\x12Y\n\tvariables\x18\x03 \x03(\x0b\x32;.gitlab.agent.autoflow.rpc.CloudEventRequest.VariablesEntryR\tvariables\x1a<\n\x0eVariablesEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x14\n\x12\x43loudEventResponse\"\xcd\x01\n\x14StartWorkflowRequest\x12-\n\x0cidentity_key\x18\x01 \x01(\tB\n\xbaH\x07r\x05 \x01(\xff\x01R\x0bidentityKey\x12<\n\x13workflow_definition\x18\x02 \x01(\x0c\x42\x0b\xbaH\x08z\x06\x10\x01\x18\x80\xa0\x06R\x12workflowDefinition\x12H\n\x07secrets\x18\x03 \x03(\x0b\x32$.gitlab.agent.autoflow.engine.SecretB\x08\xbaH\x05\x92\x01\x02\x10 R\x07secrets\"9\n\x15StartWorkflowResponse\x12 \n\x0bworkflow_id\x18\x01 \x01(\tR\x0bworkflow_id2\xed\x01\n\x08\x41utoFlow\x12k\n\nCloudEvent\x12,.gitlab.agent.autoflow.rpc.CloudEventRequest\x1a-.gitlab.agent.autoflow.rpc.CloudEventResponse\"\x00\x12t\n\rStartWorkflow\x12/.gitlab.agent.autoflow.rpc.StartWorkflowRequest\x1a\x30.gitlab.agent.autoflow.rpc.StartWorkflowResponse\"\x00\x42}ZWgitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/module/autoflow/rpc\xea\x02\x1cGitlab::Agent::AutoFlow::Rpc\x92\x03\x02\x08\x02\x62\x08\x65\x64itionsp\xe8\x07"
++descriptor_data = "\n&internal/module/autoflow/rpc/rpc.proto\x12\x19gitlab.agent.autoflow.rpc\x1a\x1b\x62uf/validate/validate.proto\x1a\x15pkg/event/event.proto\"\xb2\x02\n\x11\x43loudEventRequest\x12<\n\x05\x65vent\x18\x01 \x01(\x0b\x32\x1e.gitlab.agent.event.CloudEventB\x06\xbaH\x03\xc8\x01\x01R\x05\x65vent\x12\x46\n\x0c\x66low_project\x18\x02 \x01(\x0b\x32\x1b.gitlab.agent.event.ProjectB\x06\xbaH\x03\xc8\x01\x01R\x0b\x66lowProject\x12Y\n\tvariables\x18\x03 \x03(\x0b\x32;.gitlab.agent.autoflow.rpc.CloudEventRequest.VariablesEntryR\tvariables\x1a<\n\x0eVariablesEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x14\n\x12\x43loudEventResponse\"\xca\x01\n\x14StartWorkflowRequest\x12-\n\x0cidentity_key\x18\x01 \x01(\tB\n\xbaH\x07r\x05 \x01(\xff\x01R\x0bidentityKey\x12<\n\x13workflow_definition\x18\x02 \x01(\x0c\x42\x0b\xbaH\x08z\x06\x10\x01\x18\x80\xa0\x06R\x12workflowDefinition\x12\x45\n\x07secrets\x18\x03 \x03(\x0b\x32!.gitlab.agent.autoflow.rpc.SecretB\x08\xbaH\x05\x92\x01\x02\x10 R\x07secrets\"H\n\x06Secret\x12\x1c\n\x03key\x18\x01 \x01(\tB\n\xbaH\x07r\x05 \x01(\xff\x01R\x03key\x12 \n\x05value\x18\x02 \x01(\tB\n\xbaH\x07r\x05 \x01(\x80 R\x05value\"9\n\x15StartWorkflowResponse\x12 \n\x0bworkflow_id\x18\x01 \x01(\tR\x0bworkflow_id2\xed\x01\n\x08\x41utoFlow\x12k\n\nCloudEvent\x12,.gitlab.agent.autoflow.rpc.CloudEventRequest\x1a-.gitlab.agent.autoflow.rpc.CloudEventResponse\"\x00\x12t\n\rStartWorkflow\x12/.gitlab.agent.autoflow.rpc.StartWorkflowRequest\x1a\x30.gitlab.agent.autoflow.rpc.StartWorkflowResponse\"\x00\x42}ZWgitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/module/autoflow/rpc\xea\x02\x1cGitlab::Agent::AutoFlow::Rpc\x92\x03\x02\x08\x02\x62\x08\x65\x64itionsp\xe8\x07"
+ 
+ pool = ::Google::Protobuf::DescriptorPool.generated_pool
+ pool.add_serialized_file(descriptor_data)
+@@ -21,6 +20,7 @@ module Gitlab
+         CloudEventRequest = ::Google::Protobuf::DescriptorPool.generated_pool.lookup("gitlab.agent.autoflow.rpc.CloudEventRequest").msgclass
+         CloudEventResponse = ::Google::Protobuf::DescriptorPool.generated_pool.lookup("gitlab.agent.autoflow.rpc.CloudEventResponse").msgclass
+         StartWorkflowRequest = ::Google::Protobuf::DescriptorPool.generated_pool.lookup("gitlab.agent.autoflow.rpc.StartWorkflowRequest").msgclass
++        Secret = ::Google::Protobuf::DescriptorPool.generated_pool.lookup("gitlab.agent.autoflow.rpc.Secret").msgclass
+         StartWorkflowResponse = ::Google::Protobuf::DescriptorPool.generated_pool.lookup("gitlab.agent.autoflow.rpc.StartWorkflowResponse").msgclass
+       end
+     end

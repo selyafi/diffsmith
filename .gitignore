@@ -2,6 +2,7 @@
 /bin/
 /dist/
 /diffsmith
+/s9-input-budget
 *.test
 *.out
 

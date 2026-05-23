@@ -1,0 +1,361 @@
+diff --git a/internal/commands/update/check_update.go b/internal/commands/update/check_update.go
+index c97a43e7576ec05d3c56069f35971ea1b506e112..b61fa855f0f5fdb16d9945328788105faa1fe6e0 100644
+--- a/internal/commands/update/check_update.go
++++ b/internal/commands/update/check_update.go
+@@ -70,6 +70,10 @@ func NewCheckUpdateCmd(f cmdutils.Factory) *cobra.Command {
+ // clientCreator is a variable that can be overridden for testing
+ var clientCreator = createUnauthenticatedClient
+ 
++// installMethodDetector is overridable for tests so we don't depend on the
++// filesystem path of the running test binary.
++var installMethodDetector = DetectInstallMethod
++
+ func CheckUpdate(f cmdutils.Factory, silentSuccess bool) error {
+ 	return checkUpdate(f, silentSuccess, false)
+ }
+@@ -113,24 +117,57 @@ func checkUpdate(f cmdutils.Factory, silentSuccess bool, forceCheck bool) error
+ 	latestRelease := releases[0]
+ 	releaseURL := fmt.Sprintf("%s/-/releases/%s", defaultProjectURL, latestRelease.TagName)
+ 
+-	version := f.BuildInfo().Version
++	buildInfo := f.BuildInfo()
++	version := buildInfo.Version
+ 
+-	c := f.IO().Color()
+ 	if isOlderVersion(latestRelease.Name, version) {
+-		fmt.Fprintf(f.IO().StdErr, "%s %s -> %s\n%s\n",
+-			c.Yellow("A new version of glab has been released:"),
+-			c.Red(version), c.Green(latestRelease.TagName),
+-			releaseURL)
++		writeUpdateAvailable(f.IO(), version, latestRelease.TagName, releaseURL, installMethodDetector(), buildInfo.CodingAgent)
+ 	} else {
+ 		if silentSuccess {
+ 			return nil
+ 		}
++		c := f.IO().Color()
+ 		fmt.Fprintf(f.IO().StdErr, "%v",
+ 			c.Green("You are already using the latest version of glab!\n"))
+ 	}
+ 	return nil
+ }
+ 
++// writeUpdateAvailable renders the "update available" nudge to stderr. When a
++// coding agent is detected it emits a single bracketed line phrased as a
++// suggestion the agent can relay; otherwise it emits a multi-line, colored
++// notice for humans. When the install method is unknown the upgrade-command
++// segments are dropped and only the release-notes URL is shown.
++func writeUpdateAvailable(io *iostreams.IOStreams, currentVersion, latestVersion, releaseURL string, method InstallMethod, codingAgent string) {
++	if codingAgent != "" {
++		writeAgentUpdateLine(io, currentVersion, latestVersion, releaseURL, method)
++		return
++	}
++	writeHumanUpdateBlock(io, currentVersion, latestVersion, releaseURL, method)
++}
++
++func writeAgentUpdateLine(io *iostreams.IOStreams, currentVersion, latestVersion, releaseURL string, method InstallMethod) {
++	var b strings.Builder
++	fmt.Fprintf(&b, "[glab] Update available: %s → %s", currentVersion, latestVersion)
++	if method.UpgradeCommand != "" {
++		fmt.Fprintf(&b, " (installed via %s). Suggested upgrade command: `%s`.", method.Name, method.UpgradeCommand)
++	} else {
++		b.WriteString(".")
++	}
++	fmt.Fprintf(&b, " Release notes: %s\n", releaseURL)
++	fmt.Fprint(io.StdErr, b.String())
++}
++
++func writeHumanUpdateBlock(io *iostreams.IOStreams, currentVersion, latestVersion, releaseURL string, method InstallMethod) {
++	c := io.Color()
++	fmt.Fprintln(io.StdErr, c.Yellow("A new version of glab is available"))
++	fmt.Fprintf(io.StdErr, "  %s → %s\n", c.Red(currentVersion), c.Green(latestVersion))
++	if method.UpgradeCommand != "" {
++		fmt.Fprintf(io.StdErr, "  Run: %s\n", method.UpgradeCommand)
++	}
++	fmt.Fprintf(io.StdErr, "  Release notes: %s\n", releaseURL)
++}
++
+ // createUnauthenticatedClient creates an API client without authentication for accessing
+ // public endpoints on gitlab.com. This avoids issues where user credentials (especially
+ // from environment variables like GITLAB_TOKEN) might be for self-hosted instances
+diff --git a/internal/commands/update/check_update_test.go b/internal/commands/update/check_update_test.go
+index 875997ad661b5d2909640ef5abd425ffb01f99a6..f4ab8c2b48705afa2bb5cc9e9d223670c21a3f38 100644
+--- a/internal/commands/update/check_update_test.go
++++ b/internal/commands/update/check_update_test.go
+@@ -43,32 +43,61 @@ func mockClientCreator(t *testing.T, testClient *gitlabtesting.TestClient) {
+ 	})
+ }
+ 
++// stubInstallMethod swaps the package-level install-method detector so tests
++// don't depend on the filesystem path of the running test binary.
++func stubInstallMethod(t *testing.T, method InstallMethod) {
++	t.Helper()
++	old := installMethodDetector
++	installMethodDetector = func() InstallMethod { return method }
++	t.Cleanup(func() { installMethodDetector = old })
++}
++
+ func TestNewCheckUpdateCmd(t *testing.T) {
+ 	// NOTE: we need to force disable colors, otherwise we'd need ANSI sequences in our test output assertions.
+ 	t.Setenv("NO_COLOR", "true")
+ 
+-	type args struct {
+-		version string
+-	}
+ 	tests := []struct {
+-		name   string
+-		args   args
+-		stdOut string
+-		stdErr string
++		name          string
++		version       string
++		codingAgent   string
++		installMethod InstallMethod
++		stdErr        string
+ 	}{
+ 		{
+-			name: "same version",
+-			args: args{
+-				version: "v1.11.1",
+-			},
+-			stdErr: "You are already using the latest version of glab!\n",
++			name:    "same version",
++			version: "v1.11.1",
++			stdErr:  "You are already using the latest version of glab!\n",
+ 		},
+ 		{
+-			name: "older version",
+-			args: args{
+-				version: "v1.11.0",
+-			},
+-			stdErr: "A new version of glab has been released: v1.11.0 -> v1.11.1\nhttps://gitlab.com/gitlab-org/cli/-/releases/v1.11.1\n",
++			name:          "older version, human, homebrew",
++			version:       "v1.11.0",
++			installMethod: InstallMethod{Name: installMethodHomebrew, UpgradeCommand: homebrewUpgradeCommand},
++			stdErr: "A new version of glab is available\n" +
++				"  v1.11.0 → v1.11.1\n" +
++				"  Run: brew upgrade glab\n" +
++				"  Release notes: https://gitlab.com/gitlab-org/cli/-/releases/v1.11.1\n",
++		},
++		{
++			name:          "older version, human, unknown install method",
++			version:       "v1.11.0",
++			installMethod: InstallMethod{Name: installMethodUnknown},
++			stdErr: "A new version of glab is available\n" +
++				"  v1.11.0 → v1.11.1\n" +
++				"  Release notes: https://gitlab.com/gitlab-org/cli/-/releases/v1.11.1\n",
++		},
++		{
++			name:          "older version, agent, homebrew",
++			version:       "v1.11.0",
++			codingAgent:   "claude-code",
++			installMethod: InstallMethod{Name: installMethodHomebrew, UpgradeCommand: homebrewUpgradeCommand},
++			stdErr:        "[glab] Update available: v1.11.0 → v1.11.1 (installed via homebrew). Suggested upgrade command: `brew upgrade glab`. Release notes: https://gitlab.com/gitlab-org/cli/-/releases/v1.11.1\n",
++		},
++		{
++			name:          "older version, agent, unknown install method",
++			version:       "v1.11.0",
++			codingAgent:   "claude-code",
++			installMethod: InstallMethod{Name: installMethodUnknown},
++			stdErr:        "[glab] Update available: v1.11.0 → v1.11.1. Release notes: https://gitlab.com/gitlab-org/cli/-/releases/v1.11.1\n",
+ 		},
+ 	}
+ 	for _, tc := range tests {
+@@ -92,11 +121,12 @@ func TestNewCheckUpdateCmd(t *testing.T) {
+ 				})
+ 
+ 			mockClientCreator(t, testClient)
++			stubInstallMethod(t, tc.installMethod)
+ 
+ 			defer config.StubWriteConfig(io.Discard, io.Discard)()
+ 
+ 			exec := cmdtest.SetupCmdForTest(t, NewCheckUpdateCmd, true,
+-				cmdtest.WithBuildInfo(api.BuildInfo{Version: tc.args.version}),
++				cmdtest.WithBuildInfo(api.BuildInfo{Version: tc.version, CodingAgent: tc.codingAgent}),
+ 			)
+ 			output, err := exec("")
+ 
+diff --git a/internal/commands/update/install_method.go b/internal/commands/update/install_method.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..b792066407e6ea9ecb01b699bb68d6daddb06160
+--- /dev/null
++++ b/internal/commands/update/install_method.go
+@@ -0,0 +1,89 @@
++package update
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++)
++
++// InstallMethod identifies how the running glab binary was installed and the
++// command we should suggest to upgrade it. UpgradeCommand is empty when we
++// can't determine the install method; callers should fall back to pointing
++// users at the release notes URL.
++type InstallMethod struct {
++	Name           string
++	UpgradeCommand string
++}
++
++const (
++	installMethodHomebrew  = "homebrew"
++	installMethodGoInstall = "go-install"
++	installMethodUnknown   = "unknown"
++
++	homebrewUpgradeCommand  = "brew upgrade glab"
++	goInstallUpgradeCommand = "go install gitlab.com/gitlab-org/cli/cmd/glab@latest"
++)
++
++// DetectInstallMethod inspects the resolved path of the running executable and
++// returns its install method. It never panics: any error walking the path
++// resolves to installMethodUnknown.
++func DetectInstallMethod() InstallMethod {
++	exe, err := os.Executable()
++	if err != nil {
++		return InstallMethod{Name: installMethodUnknown}
++	}
++	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
++		exe = resolved
++	}
++	return detectInstallMethodFromPath(exe, os.Getenv("GOPATH"), homeDir())
++}
++
++func homeDir() string {
++	if h, err := os.UserHomeDir(); err == nil {
++		return h
++	}
++	return ""
++}
++
++// detectInstallMethodFromPath is the pure form of DetectInstallMethod, used
++// for testing without touching the filesystem or process state.
++func detectInstallMethodFromPath(exePath, gopath, home string) InstallMethod {
++	p := filepath.ToSlash(exePath)
++
++	homebrewPrefixes := []string{
++		"/opt/homebrew/",
++		"/usr/local/Cellar/",
++		"/home/linuxbrew/.linuxbrew/",
++	}
++	for _, prefix := range homebrewPrefixes {
++		if strings.HasPrefix(p, prefix) {
++			return InstallMethod{Name: installMethodHomebrew, UpgradeCommand: homebrewUpgradeCommand}
++		}
++	}
++
++	for _, dir := range goBinDirs(gopath, home) {
++		if dir == "" {
++			continue
++		}
++		if strings.HasPrefix(p, filepath.ToSlash(dir)+"/") {
++			return InstallMethod{Name: installMethodGoInstall, UpgradeCommand: goInstallUpgradeCommand}
++		}
++	}
++
++	return InstallMethod{Name: installMethodUnknown}
++}
++
++func goBinDirs(gopath, home string) []string {
++	var dirs []string
++	if gopath != "" {
++		for _, g := range filepath.SplitList(gopath) {
++			if g != "" {
++				dirs = append(dirs, filepath.Join(g, "bin"))
++			}
++		}
++	}
++	if home != "" {
++		dirs = append(dirs, filepath.Join(home, "go", "bin"))
++	}
++	return dirs
++}
+diff --git a/internal/commands/update/install_method_test.go b/internal/commands/update/install_method_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..c81ef306eb86a4589c3590e02e8f6b9ed72f05e5
+--- /dev/null
++++ b/internal/commands/update/install_method_test.go
+@@ -0,0 +1,84 @@
++//go:build !integration
++
++package update
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++)
++
++func TestDetectInstallMethodFromPath(t *testing.T) {
++	t.Parallel()
++
++	tests := []struct {
++		name    string
++		exePath string
++		gopath  string
++		home    string
++		want    InstallMethod
++	}{
++		{
++			name:    "homebrew apple silicon",
++			exePath: "/opt/homebrew/bin/glab",
++			home:    "/Users/somebody",
++			want:    InstallMethod{Name: installMethodHomebrew, UpgradeCommand: homebrewUpgradeCommand},
++		},
++		{
++			name:    "homebrew intel cellar",
++			exePath: "/usr/local/Cellar/glab/1.62.1/bin/glab",
++			home:    "/Users/somebody",
++			want:    InstallMethod{Name: installMethodHomebrew, UpgradeCommand: homebrewUpgradeCommand},
++		},
++		{
++			name:    "linuxbrew",
++			exePath: "/home/linuxbrew/.linuxbrew/bin/glab",
++			home:    "/home/someone",
++			want:    InstallMethod{Name: installMethodHomebrew, UpgradeCommand: homebrewUpgradeCommand},
++		},
++		{
++			name:    "go install with explicit GOPATH",
++			exePath: "/Users/someone/sdk/go/bin/glab",
++			gopath:  "/Users/someone/sdk/go",
++			home:    "/Users/someone",
++			want:    InstallMethod{Name: installMethodGoInstall, UpgradeCommand: goInstallUpgradeCommand},
++		},
++		{
++			name:    "go install via $HOME/go/bin fallback",
++			exePath: "/Users/someone/go/bin/glab",
++			home:    "/Users/someone",
++			want:    InstallMethod{Name: installMethodGoInstall, UpgradeCommand: goInstallUpgradeCommand},
++		},
++		{
++			name:    "unknown system path",
++			exePath: "/usr/local/bin/glab",
++			home:    "/Users/somebody",
++			want:    InstallMethod{Name: installMethodUnknown},
++		},
++		{
++			name:    "unknown local custom path",
++			exePath: "/Users/somebody/projects/glab/cli/bin/glab",
++			home:    "/Users/somebody",
++			want:    InstallMethod{Name: installMethodUnknown},
++		},
++		{
++			name:    "user-local path containing homebrew substring is not homebrew",
++			exePath: "/home/user/opt/homebrew/bin/glab",
++			home:    "/home/user",
++			want:    InstallMethod{Name: installMethodUnknown},
++		},
++		{
++			name:    "empty home does not match go-install",
++			exePath: "/some/go/bin/glab",
++			home:    "",
++			want:    InstallMethod{Name: installMethodUnknown},
++		},
++	}
++
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Parallel()
++			assert.Equal(t, tc.want, detectInstallMethodFromPath(tc.exePath, tc.gopath, tc.home))
++		})
++	}
++}
