@@ -16,6 +16,17 @@ type Provider interface {
 	Supports(rawURL string) bool
 	Preflight(ctx context.Context) error
 	Fetch(ctx context.Context, rawURL string) (*review.ReviewInput, error)
+
+	// PreflightList is a stricter preflight required for List(). The
+	// public-URL Fetch flow doesn't need auth, but listing typically
+	// does. Implementations should verify `gh auth status` / `glab auth
+	// status` (or equivalent) succeeds and return an actionable error
+	// otherwise.
+	PreflightList(ctx context.Context) error
+
+	// List enumerates open PRs/MRs for the given repo. Returns at most
+	// 30 results in v1 (no pagination).
+	List(ctx context.Context, repo RepoCoord) ([]PRSummary, error)
 }
 
 // RepoCoord identifies a repository hosted on a Git forge. Used by the

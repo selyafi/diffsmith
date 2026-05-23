@@ -3,6 +3,7 @@ package githubgh
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/selyafi/diffsmith/internal/diff"
@@ -114,4 +115,14 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// PreflightList verifies gh is authenticated. Implemented in Task 5.
+func (a *Adapter) PreflightList(ctx context.Context) error {
+	return errors.New("githubgh: PreflightList not implemented")
+}
+
+// List enumerates open PRs for the repo. Implemented in Task 6.
+func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider.PRSummary, error) {
+	return nil, errors.New("githubgh: List not implemented")
 }

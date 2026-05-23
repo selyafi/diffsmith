@@ -24,6 +24,14 @@ func (s *stubProvider) Fetch(context.Context, string) (*review.ReviewInput, erro
 	return nil, nil
 }
 
+func (s *stubProvider) PreflightList(context.Context) error {
+	return nil
+}
+
+func (s *stubProvider) List(context.Context, RepoCoord) ([]PRSummary, error) {
+	return nil, nil
+}
+
 func TestRegistryFind(t *testing.T) {
 	gh := &stubProvider{name: "github", supports: func(u string) bool { return u == "gh-url" }}
 	gl := &stubProvider{name: "gitlab", supports: func(u string) bool { return u == "gl-url" }}

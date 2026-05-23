@@ -3,6 +3,7 @@ package gitlabglab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -138,4 +139,14 @@ func (a *Adapter) fetchMetadata(ctx context.Context, ref *MergeRequestRef) (*mrM
 func splitProjectPath(p string) (owner, repo string) {
 	i := strings.LastIndex(p, "/")
 	return p[:i], p[i+1:]
+}
+
+// PreflightList verifies glab is authenticated. Implemented in Task 5.
+func (a *Adapter) PreflightList(ctx context.Context) error {
+	return errors.New("gitlabglab: PreflightList not implemented")
+}
+
+// List enumerates open MRs for the repo. Implemented in Task 6.
+func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider.PRSummary, error) {
+	return nil, errors.New("gitlabglab: List not implemented")
 }

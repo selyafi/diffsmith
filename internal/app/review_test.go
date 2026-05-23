@@ -100,6 +100,12 @@ func (s *stubProvider) Fetch(context.Context, string) (*review.ReviewInput, erro
 	return s.fetchInput, s.fetchErr
 }
 
+func (s *stubProvider) PreflightList(context.Context) error { return nil }
+
+func (s *stubProvider) List(context.Context, provider.RepoCoord) ([]provider.PRSummary, error) {
+	return nil, nil
+}
+
 func newTestRoot(stub *stubProvider) (*cobra.Command, *bytes.Buffer) {
 	return newTestRootWithModels(stub, nil)
 }
