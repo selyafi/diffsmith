@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/selyafi/diffsmith/internal/diff"
@@ -17,8 +18,18 @@ import (
 )
 
 // runTUI is the seam between runReview and the interactive Bubble Tea
-// program. Tests swap this to drive the model without a TTY.
-var runTUI = tui.Run
+// program. The default impl wires up a tui.LoaderModel + bubbletea
+// program + async pipeline goroutine that pushes PhaseStatusMsg /
+// LoadErrorMsg / LoadReadyMsg into the loader. Tests swap this for a
+// fake that drives the pipeline synchronously and operates on the inner
+// ReviewModel via tui.LoaderModel.ReviewModel — see withFakeTUI in
+// review_test.go.
+var runTUI = func(loader *tui.LoaderModel, pipeline func(send func(tea.Msg))) error {
+	p := tea.NewProgram(loader)
+	go pipeline(func(msg tea.Msg) { p.Send(msg) })
+	_, err := p.Run()
+	return err
+}
 
 // submitPost is the seam between runReview and the GitHub poster. Tests
 // swap this to assert whether the Submit branch ran (and with what
@@ -72,16 +83,17 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 		return err
 	}
 
-	input, err := p.Fetch(ctx, url)
-	if err != nil {
-		return err
-	}
-
-	switch {
-	case flags.printPrompt:
-		_, err := io.WriteString(cmd.OutOrStdout(), model.BuildPrompt(input))
-		return err
-	case flags.dryRun:
+	// --print-prompt and --dry-run bypass the TUI entirely: they need
+	// the fetched diff synchronously and print to stdout. No spinner.
+	if flags.printPrompt || flags.dryRun {
+		input, err := p.Fetch(ctx, url)
+		if err != nil {
+			return err
+		}
+		if flags.printPrompt {
+			_, err := io.WriteString(cmd.OutOrStdout(), model.BuildPrompt(input))
+			return err
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "fetched %d file(s) from %s (model call skipped: --dry-run)\n", len(input.Files), input.Target.URL)
 		return nil
 	}
@@ -90,23 +102,55 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 	if !ok {
 		return fmt.Errorf("unknown model %q (supported: codex, claude)", flags.model)
 	}
+	// Preflight before launching the TUI so a missing CLI surfaces as a
+	// clean error rather than flashing the TUI open and immediately
+	// closing it on a LoadErrorMsg.
 	if err := m.Preflight(ctx); err != nil {
 		return err
 	}
-	result, err := m.Review(ctx, input)
-	if err != nil {
+
+	// The pipeline runs in a goroutine launched by runTUI; it pushes
+	// PhaseStatusMsg as it transitions between fetch/model/validate, and
+	// pushes LoadReadyMsg or LoadErrorMsg at the end. The closure
+	// captures the per-session dependencies; nothing model-state-related
+	// is shared mutably across the goroutine boundary.
+	var input *review.ReviewInput
+	loader := tui.NewLoaderModel("Fetching diff…")
+	pipeline := func(send func(tea.Msg)) {
+		send(tui.PhaseStatusMsg("Fetching diff…"))
+		var fetchErr error
+		input, fetchErr = p.Fetch(ctx, url)
+		if fetchErr != nil {
+			send(tui.LoadErrorMsg{Err: fetchErr})
+			return
+		}
+
+		send(tui.PhaseStatusMsg(fmt.Sprintf("Calling %s (this can take 30–90s)…", m.Name())))
+		result, modelErr := m.Review(ctx, input)
+		if modelErr != nil {
+			send(tui.LoadErrorMsg{Err: modelErr})
+			return
+		}
+
+		send(tui.PhaseStatusMsg("Validating findings against the diff…"))
+		idx := diff.NewIndex(input.Files)
+		valid, quarantined := review.Validate(result.Findings, m.Name(), idx)
+
+		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined})
+	}
+	if err := runTUI(loader, pipeline); err != nil {
 		return err
 	}
-
-	idx := diff.NewIndex(input.Files)
-	valid, quarantined := review.Validate(result.Findings, m.Name(), idx)
-
-	tm := tui.NewModel(valid)
-	if err := runTUI(tm); err != nil {
-		return err
+	if loaderErr := loader.Err(); loaderErr != nil {
+		return loaderErr
+	}
+	if input == nil {
+		// Pipeline never produced an input (cancelled before fetch). No
+		// further work to do; just exit cleanly.
+		return nil
 	}
 
-	if marked := tm.GetFindingsMarkedForPost(); len(marked) > 0 {
+	if marked := loader.GetFindingsMarkedForPost(); len(marked) > 0 {
 		var postErr error
 		switch {
 		case flags.printPayload:
@@ -119,7 +163,7 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 		}
 	}
 
-	writeFindings(cmd.OutOrStdout(), tm.GetApprovedFindings(), quarantined, len(valid))
+	writeFindings(cmd.OutOrStdout(), loader.GetApprovedFindings(), loader.Quarantined(), loader.TotalReviewed())
 	return nil
 }
 

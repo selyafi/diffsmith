@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/selyafi/diffsmith/internal/diff"
@@ -21,10 +22,36 @@ import (
 
 // withFakeTUI swaps the package-level runTUI hook for the duration of a test.
 // It restores the original via t.Cleanup so suites stay isolated.
+//
+// The production runTUI signature took a loader + async pipeline (per
+// diffsmith-5va). Tests almost universally just want to drive the inner
+// ReviewModel to a particular state — they don't care about the loader's
+// async machinery. So this wrapper:
+//   1. Runs the pipeline synchronously, feeding each tea.Msg straight
+//      into loader.Update. By the end, the loader has transitioned to a
+//      populated ReviewModel (or set an error via LoadErrorMsg).
+//   2. Calls the test's fake against the loader's inner ReviewModel,
+//      preserving the historical callback signature.
+//
+// A test that wants to inspect the loader's loading-phase behavior can
+// override runTUI directly instead of using this helper.
 func withFakeTUI(t *testing.T, fake func(*tui.Model) error) {
 	t.Helper()
 	prev := runTUI
-	runTUI = fake
+	runTUI = func(loader *tui.LoaderModel, pipeline func(send func(tea.Msg))) error {
+		pipeline(func(msg tea.Msg) { _, _ = loader.Update(msg) })
+		if loaderErr := loader.Err(); loaderErr != nil {
+			return loaderErr
+		}
+		rm := loader.ReviewModel()
+		if rm == nil {
+			// The pipeline completed without an error AND without sending
+			// LoadReadyMsg — that's a wiring bug in production code, not a
+			// legitimate state. Surface it loudly so tests catch it.
+			t.Fatal("pipeline finished without populating ReviewModel; missing LoadReadyMsg?")
+		}
+		return fake(rm)
+	}
 	t.Cleanup(func() { runTUI = prev })
 }
 
