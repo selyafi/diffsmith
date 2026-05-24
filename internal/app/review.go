@@ -155,14 +155,28 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 
 		final := surviving[0]
 		if len(surviving) >= 2 {
-			send(tui.PhaseStatusMsg(fmt.Sprintf("Synthesizing with %s…", selected.Lead.Name())))
-			synth, err := selected.Lead.Synthesize(ctx, input, surviving)
-			if err == nil {
-				final = synth
+			// Spec §14 AC8: try synthesis on each surviving model in
+			// priority order. The first one that succeeds wins. If all
+			// fail (budget bust, parse error, network), final stays as
+			// surviving[0] — the highest-priority surviving model's own
+			// findings. Per-failure status messages surface the cause
+			// (esp. budget bust on large prompts) so users see why
+			// synthesis was skipped.
+			for _, candidate := range surviving {
+				leadModel := findModelByName(selected.All, candidate.Model)
+				if leadModel == nil {
+					continue
+				}
+				send(tui.PhaseStatusMsg(fmt.Sprintf("Synthesizing with %s…", candidate.Model)))
+				synth, err := leadModel.Synthesize(ctx, input, surviving)
+				if err == nil && synth != nil {
+					final = synth
+					break
+				}
+				if err != nil {
+					send(tui.PhaseStatusMsg(fmt.Sprintf("%s synthesis failed: %v", candidate.Model, err)))
+				}
 			}
-			// On synthesis failure: silently fall back to surviving[0]
-			// (which is the lead's own pre-synthesis result, since
-			// surviving is priority-sorted). User still gets useful output.
 		}
 
 		send(tui.PhaseStatusMsg("Validating findings against the diff…"))
@@ -215,6 +229,19 @@ func confirmPost(cmd *cobra.Command, n, prNumber int) bool {
 		return false
 	}
 	return b == 'y' || b == 'Y'
+}
+
+// findModelByName looks up a Model in the slice by its Name() string.
+// Used by the synthesis-chain fallback to find the Model corresponding
+// to a surviving result (since surviving is []*ModelReviewResult, not
+// []Model). Returns nil if not found.
+func findModelByName(models []model.Model, name string) model.Model {
+	for _, m := range models {
+		if m.Name() == name {
+			return m
+		}
+	}
+	return nil
 }
 
 // aggregateErrors flattens dropped-model errors into a single error
