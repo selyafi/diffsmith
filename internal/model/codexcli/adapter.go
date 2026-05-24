@@ -66,7 +66,20 @@ func (a *Adapter) Preflight(_ context.Context) error {
 // schema temp-file writing, and output parsing are added by subsequent
 // TDD cycles as their tests drive them.
 func (a *Adapter) Review(ctx context.Context, input *review.ReviewInput) (*review.ModelReviewResult, error) {
-	prompt := model.BuildPrompt(input)
+	return a.executeWithPrompt(ctx, model.BuildPrompt(input))
+}
+
+// Synthesize runs codex against the synthesis prompt that combines
+// the diff with N other reviewers' findings. Output is parsed and
+// validated identically to Review.
+func (a *Adapter) Synthesize(ctx context.Context, input *review.ReviewInput, results []*review.ModelReviewResult) (*review.ModelReviewResult, error) {
+	return a.executeWithPrompt(ctx, model.BuildSynthesisPrompt(input, results))
+}
+
+// executeWithPrompt runs codex against the given prompt and returns
+// the parsed result. Shared by Review (normal review prompt) and
+// Synthesize (synthesis prompt).
+func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review.ModelReviewResult, error) {
 	if len(prompt) > DefaultInputBudgetBytes {
 		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR or filter files",
 			len(prompt), DefaultInputBudgetBytes, a.Name())

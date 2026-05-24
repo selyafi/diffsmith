@@ -40,6 +40,16 @@ func (a *Adapter) Preflight(_ context.Context) error {
 	return errors.New("antigravity adapter is experimental in v1: agy requires interactive browser OAuth on every invocation with no persistent-token path, so it cannot run as a non-interactive review backend. Select --model codex or --model claude")
 }
 
+// Synthesize is unavailable for the same reason Review is: agy has no
+// non-interactive auth path in v1 (spike S8b). Surface Preflight's
+// experimental-gate error directly. When agy gains a non-interactive
+// auth path the whole body must be rewritten with a real synthesis
+// call — there is no fallback here, since a silent fallback would
+// mask the missing implementation.
+func (a *Adapter) Synthesize(ctx context.Context, input *review.ReviewInput, results []*review.ModelReviewResult) (*review.ModelReviewResult, error) {
+	return nil, a.Preflight(ctx)
+}
+
 // Review delegates to Preflight in v1. The runner is never invoked.
 func (a *Adapter) Review(ctx context.Context, _ *review.ReviewInput) (*review.ModelReviewResult, error) {
 	if err := a.Preflight(ctx); err != nil {

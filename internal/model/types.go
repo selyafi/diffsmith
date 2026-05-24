@@ -23,4 +23,10 @@ type Model interface {
 	Name() string
 	Preflight(ctx context.Context) error
 	Review(ctx context.Context, input *review.ReviewInput) (*review.ModelReviewResult, error)
+
+	// Synthesize takes the diff input plus per-model review results
+	// from other (or all) selected models and re-emits a unified
+	// []Finding set in this model's voice. Used by the multi-model
+	// flow when N≥2 selected models successfully produced findings.
+	Synthesize(ctx context.Context, input *review.ReviewInput, results []*review.ModelReviewResult) (*review.ModelReviewResult, error)
 }

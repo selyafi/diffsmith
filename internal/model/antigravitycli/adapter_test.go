@@ -93,3 +93,16 @@ func TestReviewPropagatesPreflightError(t *testing.T) {
 		t.Errorf("error doesn't surface the experimental gate: %v", err)
 	}
 }
+
+func TestAdapter_Synthesize_ReturnsSentinelError(t *testing.T) {
+	a := New(nil)
+	_, err := a.Synthesize(context.Background(),
+		&review.ReviewInput{},
+		[]*review.ModelReviewResult{{Model: "codex"}})
+	if err == nil {
+		t.Fatal("expected sentinel error from antigravity Synthesize")
+	}
+	// The error should be the same shape as Review's sentinel — exact
+	// text is checked by the Review tests; here we just confirm we
+	// don't panic and DO return an error.
+}

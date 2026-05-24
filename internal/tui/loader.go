@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,9 +26,18 @@ type LoaderModel struct {
 	phase   string
 	err     error
 
+	// per-model status section (multi-model review only)
+	modelStatuses []modelStatusLine
+
 	review        *Model
 	quarantined   []review.Quarantined
 	totalReviewed int
+}
+
+type modelStatusLine struct {
+	name  string
+	state string // "queued" | "running" | "done" | "failed"
+	err   error
 }
 
 // PhaseStatusMsg updates the loader's status text.
@@ -100,6 +110,20 @@ func (m *LoaderModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
+	case ModelStatusMsg:
+		updated := false
+		for i, line := range m.modelStatuses {
+			if line.name == msg.Name {
+				m.modelStatuses[i] = modelStatusLine{name: msg.Name, state: msg.State, err: msg.Err}
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			m.modelStatuses = append(m.modelStatuses, modelStatusLine{name: msg.Name, state: msg.State, err: msg.Err})
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -117,8 +141,34 @@ func (m *LoaderModel) View() string {
 	if m.err != nil {
 		return loaderErrorStyle.Render(fmt.Sprintf("\n  ✗  %v\n\n  Press q or ctrl+c to exit.\n", m.err))
 	}
-	return loaderStyle.Render(fmt.Sprintf("\n  %s  %s\n\n  Press q or ctrl+c to cancel.\n",
-		m.spinner.View(), m.phase))
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n  %s  %s\n", m.spinner.View(), m.phase)
+
+	if len(m.modelStatuses) > 0 {
+		b.WriteString("\n")
+		for _, line := range m.modelStatuses {
+			marker := "—"
+			switch line.state {
+			case "running":
+				marker = "running…"
+			case "done":
+				marker = "✓ done"
+			case "failed":
+				if line.err != nil {
+					marker = "✗ failed: " + line.err.Error()
+				} else {
+					marker = "✗ failed"
+				}
+			case "queued":
+				marker = "queued"
+			}
+			fmt.Fprintf(&b, "  %-14s %s\n", line.name, marker)
+		}
+	}
+
+	b.WriteString("\n  Press q or ctrl+c to cancel.\n")
+	return loaderStyle.Render(b.String())
 }
 
 // GetApprovedFindings delegates to the inner ReviewModel; returns nil
@@ -151,6 +201,15 @@ func (m *LoaderModel) TotalReviewed() int { return m.totalReviewed }
 // Err returns any pipeline error pushed via LoadErrorMsg. The app layer
 // reads this after the TUI quits and propagates as the process exit code.
 func (m *LoaderModel) Err() error { return m.err }
+
+// ModelStatusMsg reports a state transition for a single model in
+// the multi-model review fan-out. Loader uses these to render per-
+// model rows.
+type ModelStatusMsg struct {
+	Name  string
+	State string // "queued" | "running" | "done" | "failed"
+	Err   error  // populated when State == "failed"
+}
 
 // ReviewModel returns the inner ReviewModel once findings have loaded,
 // or nil before LoadReadyMsg arrives. Used by the app-layer test seam to

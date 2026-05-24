@@ -173,3 +173,82 @@ func TestReviewEmptyFindings(t *testing.T) {
 		t.Errorf("Findings count = %d, want 0", len(result.Findings))
 	}
 }
+
+// recordedCall captures one invocation of the scripted runner. Mirrors
+// the shape used in internal/model/codexcli/adapter_test.go so tests
+// across adapters can assert against the same call structure.
+type recordedCall struct {
+	name  string
+	args  []string
+	stdin string
+}
+
+// scriptedRunner returns a runner that replays canned byte slices in
+// order and records every invocation (name + args + stdin). If
+// responses run out, it fails the test.
+func scriptedRunner(t *testing.T, responses [][]byte) (func(context.Context, io.Reader, string, ...string) ([]byte, error), *[]recordedCall) {
+	t.Helper()
+	idx := 0
+	calls := &[]recordedCall{}
+	run := func(_ context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		var buf bytes.Buffer
+		if stdin != nil {
+			_, _ = io.Copy(&buf, stdin)
+		}
+		*calls = append(*calls, recordedCall{
+			name:  name,
+			args:  append([]string(nil), args...),
+			stdin: buf.String(),
+		})
+		if idx >= len(responses) {
+			t.Fatalf("scriptedRunner: unexpected call #%d (only %d canned)", idx+1, len(responses))
+		}
+		resp := responses[idx]
+		idx++
+		return resp, nil
+	}
+	return run, calls
+}
+
+// TestAdapter_Synthesize_Success verifies Synthesize invokes claude once and
+// returns the parsed findings.
+func TestAdapter_Synthesize_Success(t *testing.T) {
+	canned := []byte(`{"findings":[{"file":"x.go","line":3,"severity":"low","title":"unified","evidence":"e","suggested_comment":"c","fix_hint":"f","confidence":0.7}]}`)
+	run, calls := scriptedRunner(t, [][]byte{canned})
+	a := New(run)
+
+	input := &review.ReviewInput{RawDiff: "diff --git a/x.go b/x.go\n+y"}
+	results := []*review.ModelReviewResult{
+		{Model: "codex", RawOutput: "{}"},
+		{Model: "claude", RawOutput: "{}"},
+	}
+
+	got, err := a.Synthesize(context.Background(), input, results)
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if len(got.Findings) != 1 || got.Findings[0].Title != "unified" {
+		t.Errorf("unexpected synthesized findings: %+v", got)
+	}
+	if got.Model != "claude" {
+		t.Errorf("Model field should be claude; got %s", got.Model)
+	}
+	if len(*calls) != 1 {
+		t.Errorf("expected one claude invocation; got %d", len(*calls))
+	}
+}
+
+// TestAdapter_Synthesize_RunnerError verifies Synthesize propagates runner
+// errors.
+func TestAdapter_Synthesize_RunnerError(t *testing.T) {
+	failingRun := func(ctx context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
+		return nil, errors.New("simulated claude failure")
+	}
+	a := New(failingRun)
+	_, err := a.Synthesize(context.Background(),
+		&review.ReviewInput{RawDiff: "d"},
+		[]*review.ModelReviewResult{{Model: "codex", RawOutput: "{}"}})
+	if err == nil {
+		t.Fatal("expected error when claude exec fails")
+	}
+}

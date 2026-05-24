@@ -3,6 +3,7 @@ package codexcli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -292,5 +293,50 @@ func TestReviewPipesPromptToStdin(t *testing.T) {
 		if !strings.Contains(stdin, want) {
 			t.Errorf("stdin missing %q (got %d bytes)", want, len(stdin))
 		}
+	}
+}
+
+func TestAdapter_Synthesize_Success(t *testing.T) {
+	canned := []byte(`{"findings":[{"file":"x.go","line":7,"severity":"medium","title":"unified","evidence":"e","suggested_comment":"c","fix_hint":"f","confidence":0.8}]}`)
+	run, calls := scriptedRunner(t, [][]byte{canned})
+	a := New(run)
+
+	input := &review.ReviewInput{
+		Target:  review.ReviewTarget{URL: "https://example/pr/1"},
+		RawDiff: "diff --git a/x.go b/x.go\n+something",
+	}
+	results := []*review.ModelReviewResult{
+		{Model: "codex", RawOutput: `{"findings":[]}`},
+		{Model: "claude", RawOutput: `{"findings":[]}`},
+	}
+
+	got, err := a.Synthesize(context.Background(), input, results)
+	if err != nil {
+		t.Fatalf("Synthesize: %v", err)
+	}
+	if len(got.Findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(got.Findings))
+	}
+	if got.Findings[0].Title != "unified" {
+		t.Errorf("unexpected title %q", got.Findings[0].Title)
+	}
+	if got.Model != "codex" {
+		t.Errorf("ModelReviewResult.Model should be codex; got %s", got.Model)
+	}
+	if len(*calls) != 1 {
+		t.Errorf("expected one codex invocation; got %d", len(*calls))
+	}
+}
+
+func TestAdapter_Synthesize_RunnerError(t *testing.T) {
+	failingRun := func(ctx context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
+		return nil, errors.New("simulated codex failure")
+	}
+	a := New(failingRun)
+	_, err := a.Synthesize(context.Background(),
+		&review.ReviewInput{RawDiff: "d"},
+		[]*review.ModelReviewResult{{Model: "claude", RawOutput: "{}"}})
+	if err == nil {
+		t.Fatal("expected error when codex exec fails")
 	}
 }

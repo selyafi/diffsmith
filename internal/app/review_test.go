@@ -88,6 +88,10 @@ func (m *stubModel) Review(context.Context, *review.ReviewInput) (*review.ModelR
 	return m.reviewResult, m.reviewErr
 }
 
+func (m *stubModel) Synthesize(context.Context, *review.ReviewInput, []*review.ModelReviewResult) (*review.ModelReviewResult, error) {
+	return nil, nil
+}
+
 func (s *stubProvider) Supports(u string) bool { return s.supports(u) }
 
 func (s *stubProvider) Preflight(context.Context) error {
