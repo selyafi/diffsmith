@@ -3,8 +3,8 @@ package githubgh
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"time"
 
 	"github.com/selyafi/diffsmith/internal/diff"
 	"github.com/selyafi/diffsmith/internal/provider"
@@ -117,12 +117,56 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// PreflightList verifies gh is authenticated. Implemented in Task 5.
+// PreflightList verifies gh is authenticated before listing PRs.
 func (a *Adapter) PreflightList(ctx context.Context) error {
-	return errors.New("githubgh: PreflightList not implemented")
+	if _, err := a.run(ctx, nil, "gh", "auth", "status"); err != nil {
+		return fmt.Errorf("gh is installed but not authenticated; run 'gh auth login': %w", err)
+	}
+	return nil
 }
 
-// List enumerates open PRs for the repo. Implemented in Task 6.
+type ghPR struct {
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	Author    struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	URL       string    `json:"url"`
+	IsDraft   bool      `json:"isDraft"`
+}
+
+// List enumerates open PRs for the repo.
 func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider.PRSummary, error) {
-	return nil, errors.New("githubgh: List not implemented")
+	args := []string{
+		"pr", "list",
+		"--repo", repo.Owner + "/" + repo.Name,
+		"--state=open",
+		"--json", "number,title,author,updatedAt,url,isDraft",
+		"--limit", "30",
+	}
+	out, err := a.run(ctx, nil, "gh", args...)
+	if err != nil {
+		return nil, fmt.Errorf("gh pr list: %w", err)
+	}
+	var raw []ghPR
+	if err := json.Unmarshal(out, &raw); err != nil {
+		preview := string(out)
+		if len(preview) > 200 {
+			preview = preview[:200] + "…"
+		}
+		return nil, fmt.Errorf("failed to parse gh output: %w (raw: %s)", err, preview)
+	}
+	result := make([]provider.PRSummary, 0, len(raw))
+	for _, r := range raw {
+		result = append(result, provider.PRSummary{
+			Number:    r.Number,
+			Title:     r.Title,
+			Author:    r.Author.Login,
+			URL:       r.URL,
+			UpdatedAt: r.UpdatedAt,
+			Draft:     r.IsDraft,
+		})
+	}
+	return result, nil
 }

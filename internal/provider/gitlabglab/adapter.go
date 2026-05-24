@@ -3,10 +3,10 @@ package gitlabglab
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/selyafi/diffsmith/internal/diff"
 	"github.com/selyafi/diffsmith/internal/provider"
@@ -141,12 +141,57 @@ func splitProjectPath(p string) (owner, repo string) {
 	return p[:i], p[i+1:]
 }
 
-// PreflightList verifies glab is authenticated. Implemented in Task 5.
+// PreflightList verifies glab is authenticated before listing MRs.
 func (a *Adapter) PreflightList(ctx context.Context) error {
-	return errors.New("gitlabglab: PreflightList not implemented")
+	if _, err := a.run(ctx, nil, "glab", "auth", "status"); err != nil {
+		return fmt.Errorf("glab is installed but not authenticated; run 'glab auth login': %w", err)
+	}
+	return nil
 }
 
-// List enumerates open MRs for the repo. Implemented in Task 6.
+// glabMR mirrors the per-item JSON shape returned by `glab mr list --output json`.
+type glabMR struct {
+	IID    int    `json:"iid"`
+	Title  string `json:"title"`
+	Author struct {
+		Username string `json:"username"`
+	} `json:"author"`
+	UpdatedAt time.Time `json:"updated_at"`
+	WebURL    string    `json:"web_url"`
+	Draft     bool      `json:"draft"`
+}
+
+// List enumerates open MRs for the repo via `glab mr list`.
 func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider.PRSummary, error) {
-	return nil, errors.New("gitlabglab: List not implemented")
+	args := []string{
+		"mr", "list",
+		"--repo", repo.Owner + "/" + repo.Name,
+		"--opened",
+		"--output", "json",
+		"--per-page", "30",
+	}
+	out, err := a.run(ctx, nil, "glab", args...)
+	if err != nil {
+		return nil, fmt.Errorf("glab mr list: %w", err)
+	}
+	var raw []glabMR
+	if err := json.Unmarshal(out, &raw); err != nil {
+		preview := string(out)
+		if len(preview) > 200 {
+			preview = preview[:200] + "…"
+		}
+		return nil, fmt.Errorf("failed to parse glab output: %w (raw: %s)", err, preview)
+	}
+	result := make([]provider.PRSummary, 0, len(raw))
+	for _, r := range raw {
+		result = append(result, provider.PRSummary{
+			Number:    r.IID,
+			Title:     r.Title,
+			Author:    r.Author.Username,
+			URL:       r.WebURL,
+			UpdatedAt: r.UpdatedAt,
+			Draft:     r.Draft,
+		})
+	}
+	return result, nil
 }

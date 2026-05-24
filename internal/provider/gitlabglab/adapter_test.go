@@ -340,6 +340,35 @@ func TestParseRealGitLabMRSingleGroup(t *testing.T) {
 //	glab mr diff 3650 -R gitlab-org/cluster-integration/gitlab-agent \
 //	  --raw --color never > \
 //	  internal/provider/gitlabglab/testdata/gitlab_mr_gitlab_agent_3650.diff
+func TestAdapter_PreflightList_Success(t *testing.T) {
+	run, calls := scriptedRunner(t, []scriptResult{
+		{out: []byte("Logged in to gitlab.com as selyafi (token)\n")},
+	})
+	a := New(run)
+
+	if err := a.PreflightList(context.Background()); err != nil {
+		t.Fatalf("PreflightList: %v", err)
+	}
+	if len(*calls) != 1 || (*calls)[0].args[0] != "auth" {
+		t.Errorf("expected glab auth status call, got %+v", (*calls)[0])
+	}
+}
+
+func TestAdapter_PreflightList_NotAuthenticated(t *testing.T) {
+	failingRun := func(ctx context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
+		return []byte("Not logged in.\n"), errors.New("exit status 1")
+	}
+	a := New(failingRun)
+
+	err := a.PreflightList(context.Background())
+	if err == nil {
+		t.Fatal("expected error when glab is unauthenticated")
+	}
+	if !strings.Contains(err.Error(), "glab auth login") {
+		t.Errorf("error should mention glab auth login; got: %v", err)
+	}
+}
+
 func TestParseRealGitLabMRNestedGroup(t *testing.T) {
 	raw := readRealFixture(t, "gitlab_mr_gitlab_agent_3650.diff")
 
@@ -364,5 +393,43 @@ func TestParseRealGitLabMRNestedGroup(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected internal/module/autoflow/rpc/rpc.proto; fixture may have been replaced")
+	}
+}
+
+func TestAdapter_List_Success(t *testing.T) {
+	canned := []byte(`[
+		{"iid":3650,"title":"feat: kubernetes agent v2","author":{"username":"alice"},"updated_at":"2026-05-19T08:00:00Z","web_url":"https://gitlab.com/gitlab-org/cluster-integration/gitlab-agent/-/merge_requests/3650","draft":false},
+		{"iid":3313,"title":"docs: clarify","author":{"username":"bob"},"updated_at":"2026-05-15T14:00:00Z","web_url":"https://gitlab.com/gitlab-org/cli/-/merge_requests/3313","draft":true}
+	]`)
+	run, calls := scriptedRunner(t, []scriptResult{{out: canned}})
+	a := New(run)
+
+	got, err := a.List(context.Background(), provider.RepoCoord{Host: "gitlab.com", Owner: "gitlab-org/cli", Name: "cli"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d, want 2", len(got))
+	}
+	if got[0].Number != 3650 || got[0].Author != "alice" || got[0].Draft {
+		t.Errorf("row 0 mismatch: %+v", got[0])
+	}
+	if got[1].Number != 3313 || got[1].Author != "bob" || !got[1].Draft {
+		t.Errorf("row 1 mismatch: %+v", got[1])
+	}
+	if args := (*calls)[0].args; args[0] != "mr" || args[1] != "list" {
+		t.Errorf("expected glab mr list, got %v", args)
+	}
+}
+
+func TestAdapter_List_Empty(t *testing.T) {
+	run, _ := scriptedRunner(t, []scriptResult{{out: []byte(`[]`)}})
+	a := New(run)
+	got, err := a.List(context.Background(), provider.RepoCoord{Host: "gitlab.com", Owner: "x", Name: "y"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty slice, got %d", len(got))
 	}
 }

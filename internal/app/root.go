@@ -39,6 +39,7 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.AddCommand(newReviewCmd(defaultRegistry(), defaultModels()))
+	root.AddCommand(newInboxCmd(defaultRegistry(), defaultModels()))
 	return root
 }
 

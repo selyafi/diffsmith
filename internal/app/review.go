@@ -73,8 +73,14 @@ func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	return runReviewByURL(ctx, cmd, args[0], flags, registry, models)
+}
 
-	url := args[0]
+// runReviewByURL is the URL-driven entry point used by both `review`
+// (one-shot CLI) and `inbox` (interactive). It skips arg parsing and
+// runs the existing fetch → model → validate → TUI → post pipeline for
+// a single URL.
+func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *reviewFlags, registry *provider.Registry, models map[string]model.Model) error {
 	p, err := registry.Find(url)
 	if err != nil {
 		return err
