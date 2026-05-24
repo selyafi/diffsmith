@@ -1,6 +1,7 @@
 package gitlabglab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -161,18 +162,27 @@ type glabMR struct {
 	Draft     bool      `json:"draft"`
 }
 
-// List enumerates open MRs for the repo via `glab mr list`.
+// List enumerates open MRs for the repo via `glab mr list`. Omitting
+// `--opened` (deprecated as of glab v1.x) inherits the default "open"
+// behavior without triggering the deprecation warning that glab writes
+// to stdout, mixed with the JSON.
 func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider.PRSummary, error) {
 	args := []string{
 		"mr", "list",
 		"--repo", repo.Owner + "/" + repo.Name,
-		"--opened",
 		"--output", "json",
 		"--per-page", "30",
 	}
 	out, err := a.run(ctx, nil, "glab", args...)
 	if err != nil {
 		return nil, fmt.Errorf("glab mr list: %w", err)
+	}
+	// glab writes warnings (deprecations, update-available notices, etc.)
+	// to stdout, prefixed before the JSON payload. Skip everything up to
+	// the first `[` so a stray preamble line doesn't break unmarshal.
+	jsonStart := bytes.IndexByte(out, '[')
+	if jsonStart > 0 {
+		out = out[jsonStart:]
 	}
 	var raw []glabMR
 	if err := json.Unmarshal(out, &raw); err != nil {

@@ -433,3 +433,33 @@ func TestAdapter_List_Empty(t *testing.T) {
 		t.Errorf("expected empty slice, got %d", len(got))
 	}
 }
+
+// glab prints warnings (deprecations, update-available notices, etc.)
+// to stdout, prefixed before the JSON. Confirm the parser skips the
+// preamble instead of failing.
+func TestAdapter_List_StripsWarningPreamble(t *testing.T) {
+	canned := []byte("Flag --opened has been deprecated, default value if neither --closed, --locked or --merged is used.\n[{\"iid\":42,\"title\":\"t\",\"author\":{\"username\":\"u\"},\"draft\":false,\"web_url\":\"https://example/42\"}]")
+	run, _ := scriptedRunner(t, []scriptResult{{out: canned}})
+	a := New(run)
+	got, err := a.List(context.Background(), provider.RepoCoord{Host: "gitlab.com", Owner: "g", Name: "p"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 || got[0].Number != 42 {
+		t.Errorf("expected 1 row with Number=42; got %+v", got)
+	}
+}
+
+// Confirm we no longer pass the deprecated --opened flag.
+func TestAdapter_List_OmitsDeprecatedOpenedFlag(t *testing.T) {
+	run, calls := scriptedRunner(t, []scriptResult{{out: []byte(`[]`)}})
+	a := New(run)
+	if _, err := a.List(context.Background(), provider.RepoCoord{Host: "gitlab.com", Owner: "g", Name: "p"}); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, arg := range (*calls)[0].args {
+		if arg == "--opened" {
+			t.Fatal("--opened is deprecated and should no longer be passed; glab uses 'open' as the default")
+		}
+	}
+}
