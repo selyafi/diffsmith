@@ -40,45 +40,53 @@ func newInboxCmd(registry *provider.Registry, models map[string]model.Model) *co
 		Short: "Interactively review open PRs/MRs for the current git repo",
 		Long: "Detects the current repo from `git remote`, lists its open PRs/MRs,\n" +
 			"and opens the picked one in the review TUI. Quit review to return to\n" +
-			"the list. `r` refreshes; `q` exits.",
+			"the list. `r` refreshes; `q` exits.\n\n" +
+			"This is also the default behavior of bare `diffsmith` (no subcommand).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
-
-			repo, err := repodetect.Detect()
-			if err != nil {
-				return err
-			}
-			p, err := registry.ByHost(repo.Host)
-			if err != nil {
-				return err
-			}
-
-			opener := func(ctx context.Context, cmd *cobra.Command, url string) error {
-				return runReviewByURL(ctx, cmd, url, flags, registry, models)
-			}
-
-			var current *tui.InboxModel
-			lister := func() (*provider.PRSummary, inboxAction, error) {
-				if current == nil {
-					return nil, 0, fmt.Errorf("inbox: lister called before model initialized")
-				}
-				prog := tea.NewProgram(current)
-				if _, err := prog.Run(); err != nil {
-					return nil, 0, err
-				}
-				return current.Pick(), inboxAction(current.Action()), nil
-			}
-
-			return runInbox(cmd, p, repo, &current, lister, opener)
+			return runInboxCommand(cmd, flags, registry, models)
 		},
 	}
 	cmd.Flags().StringVar(&flags.model, "model", "codex", "model adapter to use for opened reviews (codex, claude)")
 	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print GraphQL payload(s) instead of posting upstream when reviewing")
 	return cmd
+}
+
+// runInboxCommand is the cobra RunE shared by the `inbox` subcommand
+// and bare `diffsmith` (no subcommand). Owns the repo detection,
+// provider lookup, lister/opener setup, and delegates to runInbox.
+func runInboxCommand(cmd *cobra.Command, flags *reviewFlags, registry *provider.Registry, models map[string]model.Model) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	repo, err := repodetect.Detect()
+	if err != nil {
+		return err
+	}
+	p, err := registry.ByHost(repo.Host)
+	if err != nil {
+		return err
+	}
+
+	opener := func(ctx context.Context, cmd *cobra.Command, url string) error {
+		return runReviewByURL(ctx, cmd, url, flags, registry, models)
+	}
+
+	var current *tui.InboxModel
+	lister := func() (*provider.PRSummary, inboxAction, error) {
+		if current == nil {
+			return nil, 0, fmt.Errorf("inbox: lister called before model initialized")
+		}
+		prog := tea.NewProgram(current)
+		if _, err := prog.Run(); err != nil {
+			return nil, 0, err
+		}
+		return current.Pick(), inboxAction(current.Action()), nil
+	}
+
+	return runInbox(cmd, p, repo, &current, lister, opener)
 }
 
 // runInbox is the single source of truth for the loop. modelPtr is
