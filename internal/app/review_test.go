@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -53,6 +54,34 @@ func withFakeTUI(t *testing.T, fake func(*tui.Model) error) {
 		return fake(rm)
 	}
 	t.Cleanup(func() { runTUI = prev })
+}
+
+// withFakePicker swaps the package-level pickerRunner hook for the duration
+// of a test so that tests don't need a real TTY. The replacement finds all
+// available models in the items slice and selects them all, which mirrors
+// what a user would see in the TUI with defaults applied.
+//
+// Tests that need a specific model selection can override pickerRunner
+// directly (following the same pattern).
+func withFakePicker(t *testing.T, models map[string]model.Model) {
+	t.Helper()
+	prev := pickerRunner
+	pickerRunner = func(items []tui.ModelPickerItem, ms map[string]model.Model) (*model.SelectedModels, error) {
+		chosen := make([]model.Model, 0)
+		for _, it := range items {
+			if it.Available {
+				if m, ok := ms[it.Name]; ok {
+					chosen = append(chosen, m)
+				}
+			}
+		}
+		if len(chosen) == 0 {
+			return nil, fmt.Errorf("withFakePicker: no models available")
+		}
+		return model.NewSelectedModels(chosen), nil
+	}
+	_ = models // kept for call-site readability; actual lookup uses the closure arg
+	t.Cleanup(func() { pickerRunner = prev })
 }
 
 // stubProvider is a hand-rolled Provider for testing review.go without
@@ -256,13 +285,14 @@ func TestReviewDefaultPathRunsModelAndPrintsFindings(t *testing.T) {
 		},
 	}
 
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
 	withFakeTUI(t, func(m *tui.Model) error {
 		m.ApproveCurrent()
 		return nil
 	})
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
-	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -315,6 +345,7 @@ func TestReviewDefaultPathFiltersBySelections(t *testing.T) {
 		},
 	}
 
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
 	withFakeTUI(t, func(m *tui.Model) error {
 		// Approve the first finding, dismiss the second.
 		m.ApproveCurrent()
@@ -324,7 +355,7 @@ func TestReviewDefaultPathFiltersBySelections(t *testing.T) {
 	})
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
-	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -365,13 +396,14 @@ func TestReviewPrintPayloadRoutesMarkedFindingsToDryRun(t *testing.T) {
 		},
 	}
 
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
 	withFakeTUI(t, func(m *tui.Model) error {
 		m.MarkCurrentForPost()
 		return nil
 	})
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
-	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex", "--print-payload"})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--print-payload"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -423,12 +455,13 @@ func TestReviewConfirmationPromptYesProceedsToSubmit(t *testing.T) {
 			}},
 		},
 	}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
 	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
 	calls, captured := withFakeSubmit(t)
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
 	root.SetIn(stdinFor("y\n"))
-	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -457,12 +490,13 @@ func TestReviewConfirmationPromptCapitalYProceedsToSubmit(t *testing.T) {
 			}},
 		},
 	}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
 	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
 	calls, _ := withFakeSubmit(t)
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
 	root.SetIn(stdinFor("Y\n"))
-	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -489,6 +523,7 @@ func TestReviewConfirmationPromptNonYesSkipsSubmit(t *testing.T) {
 			}},
 		},
 	}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
 	// Approve AND mark for post so the finding appears in the writeFindings
 	// summary even when Submit is skipped (acceptance: "skip the Submit call
 	// but still print the writeFindings summary").
@@ -501,7 +536,7 @@ func TestReviewConfirmationPromptNonYesSkipsSubmit(t *testing.T) {
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
 	root.SetIn(stdinFor("n\n"))
-	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -531,12 +566,13 @@ func TestReviewConfirmationPromptEOFSkipsSubmit(t *testing.T) {
 			}},
 		},
 	}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
 	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
 	calls, _ := withFakeSubmit(t)
 
 	root, _ := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
 	root.SetIn(stdinFor("")) // empty -> ReadByte returns io.EOF
-	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex"})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -560,12 +596,13 @@ func TestReviewPrintPayloadFlagBypassesConfirmationPrompt(t *testing.T) {
 			}},
 		},
 	}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
 	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
 	// Empty stdin would block forever if --print-payload didn't bypass the prompt.
 	root.SetIn(stdinFor(""))
-	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "codex", "--print-payload"})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--print-payload"})
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -675,17 +712,22 @@ index 1111111..2222222 100644
 	}
 }
 
-func TestReviewUnknownModelErrors(t *testing.T) {
+// TestReviewNoModelsAvailableErrors verifies that when all model adapters fail
+// their preflight checks the picker surfaces a clear "no review CLIs available"
+// error rather than a confusing TUI failure.
+func TestReviewNoModelsAvailableErrors(t *testing.T) {
 	stub := &stubProvider{
 		supports:   func(string) bool { return true },
 		fetchInput: sampleReviewInput(),
 	}
-	root, _ := newTestRootWithModels(stub, map[string]model.Model{"codex": &stubModel{name: "codex"}})
-	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--model", "nope"})
+	// All models fail preflight.
+	unavailable := &stubModel{name: "codex", preflightErr: errors.New("codex not installed")}
+	root, _ := newTestRootWithModels(stub, map[string]model.Model{"codex": unavailable})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
 
 	err := root.Execute()
-	if err == nil || !strings.Contains(err.Error(), "unknown model") {
-		t.Errorf("want unknown-model error; got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no review CLIs available") {
+		t.Errorf("want no-CLIs-available error; got: %v", err)
 	}
 }
 

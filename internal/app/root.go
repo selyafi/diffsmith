@@ -2,6 +2,10 @@
 package app
 
 import (
+	"context"
+	"fmt"
+
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/selyafi/diffsmith/internal/model"
@@ -11,6 +15,7 @@ import (
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/provider/githubgh"
 	"github.com/selyafi/diffsmith/internal/provider/gitlabglab"
+	"github.com/selyafi/diffsmith/internal/tui"
 )
 
 // version is set via SetVersion from main at startup. The literal "dev"
@@ -32,8 +37,8 @@ func newRootCmd() *cobra.Command {
 	models := defaultModels()
 	// Bare `diffsmith` (no subcommand) runs the inbox flow against the
 	// current git repo. The `inbox` subcommand remains registered for
-	// muscle-memory users; both share runInboxCommand.
-	rootFlags := &reviewFlags{model: "codex"}
+	// muscle-memory users; both share runInboxCommandWithSelected.
+	rootFlags := &reviewFlags{}
 	root := &cobra.Command{
 		Use:   "diffsmith",
 		Short: "Local, human-in-the-loop AI review cockpit for GitHub PRs and GitLab MRs",
@@ -46,12 +51,90 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInboxCommand(cmd, rootFlags, registry, models)
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			items := preflightModels(ctx, models)
+			selected, err := pickerRunner(items, models)
+			if err != nil {
+				return err
+			}
+			return runInboxCommandWithSelected(cmd, rootFlags, registry, selected)
 		},
 	}
 	root.AddCommand(newReviewCmd(registry, models))
 	root.AddCommand(newInboxCmd(registry, models))
 	return root
+}
+
+// preflightModels probes each adapter and returns a slice of picker
+// items annotated with availability. Order is stable: codex, claude,
+// antigravity.
+func preflightModels(ctx context.Context, models map[string]model.Model) []tui.ModelPickerItem {
+	order := []string{"codex", "claude", "antigravity"}
+	items := make([]tui.ModelPickerItem, 0, len(order))
+	for _, name := range order {
+		m, ok := models[name]
+		if !ok {
+			continue
+		}
+		err := m.Preflight(ctx)
+		items = append(items, tui.ModelPickerItem{
+			Name:        name,
+			Available:   err == nil,
+			Unavailable: errMsg(err),
+		})
+	}
+	return items
+}
+
+func errMsg(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// pickerRunner is the seam tests use to bypass the interactive picker
+// TUI. Production code uses runPickerForModels; tests can swap this
+// to return a fixed *model.SelectedModels.
+var pickerRunner = func(items []tui.ModelPickerItem, models map[string]model.Model) (*model.SelectedModels, error) {
+	return runPickerForModels(items, models)
+}
+
+// runPickerForModels shows the picker TUI and returns the resulting
+// SelectedModels, or nil + error if cancelled / nothing selected.
+func runPickerForModels(items []tui.ModelPickerItem, models map[string]model.Model) (*model.SelectedModels, error) {
+	available := 0
+	for _, it := range items {
+		if it.Available {
+			available++
+		}
+	}
+	if available == 0 {
+		return nil, fmt.Errorf("no review CLIs available; install/auth at least one of: codex, claude, antigravity")
+	}
+
+	picker := tui.NewModelPickerModel(items)
+	prog := tea.NewProgram(picker)
+	if _, err := prog.Run(); err != nil {
+		return nil, fmt.Errorf("picker: %w", err)
+	}
+	if picker.Cancelled() {
+		return nil, fmt.Errorf("review cancelled")
+	}
+	names := picker.SelectedNames()
+	if len(names) == 0 {
+		return nil, fmt.Errorf("no models selected")
+	}
+	chosen := make([]model.Model, 0, len(names))
+	for _, n := range names {
+		if m, ok := models[n]; ok {
+			chosen = append(chosen, m)
+		}
+	}
+	return model.NewSelectedModels(chosen), nil
 }
 
 // defaultRegistry returns the provider registry wired to real CLIs. Tests

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -39,7 +40,6 @@ var submitPost = func(ctx context.Context, out io.Writer, target review.ReviewTa
 }
 
 type reviewFlags struct {
-	model        string
 	dryRun       bool
 	printPrompt  bool
 	printPayload bool
@@ -56,11 +56,26 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 			"findings are written to stdout on quit.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runReview(cmd, args, flags, registry, models)
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			// --print-prompt and --dry-run bypass the model entirely;
+			// runReviewByURL short-circuits before any model is invoked, so
+			// nil SelectedModels is safe here.
+			if flags.printPrompt || flags.dryRun {
+				return runReview(cmd, args, flags, nil, registry)
+			}
+
+			items := preflightModels(ctx, models)
+			selected, err := pickerRunner(items, models)
+			if err != nil {
+				return err
+			}
+			return runReview(cmd, args, flags, selected, registry)
 		},
 	}
 
-	cmd.Flags().StringVar(&flags.model, "model", "codex", "model adapter to use (codex, claude)")
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "fetch and normalize the diff, then stop before the model call")
 	cmd.Flags().BoolVar(&flags.printPrompt, "print-prompt", false, "print the model prompt and exit without invoking the model")
 	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print the GraphQL payload(s) for findings marked with 'p' in the TUI, instead of posting upstream")
@@ -68,19 +83,19 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 	return cmd
 }
 
-func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, registry *provider.Registry, models map[string]model.Model) error {
+func runReview(cmd *cobra.Command, args []string, flags *reviewFlags, selected *model.SelectedModels, registry *provider.Registry) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return runReviewByURL(ctx, cmd, args[0], flags, registry, models)
+	return runReviewByURL(ctx, cmd, args[0], flags, selected, registry)
 }
 
 // runReviewByURL is the URL-driven entry point used by both `review`
 // (one-shot CLI) and `inbox` (interactive). It skips arg parsing and
 // runs the existing fetch → model → validate → TUI → post pipeline for
 // a single URL.
-func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *reviewFlags, registry *provider.Registry, models map[string]model.Model) error {
+func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *reviewFlags, selected *model.SelectedModels, registry *provider.Registry) error {
 	p, err := registry.Find(url)
 	if err != nil {
 		return err
@@ -104,15 +119,13 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		return nil
 	}
 
-	m, ok := models[flags.model]
-	if !ok {
-		return fmt.Errorf("unknown model %q (supported: codex, claude)", flags.model)
-	}
-	// Preflight before launching the TUI so a missing CLI surfaces as a
-	// clean error rather than flashing the TUI open and immediately
-	// closing it on a LoadErrorMsg.
-	if err := m.Preflight(ctx); err != nil {
-		return err
+	// Preflight all selected models before launching the TUI so missing
+	// CLIs surface as clean errors rather than flashing the TUI open and
+	// immediately closing it on a LoadErrorMsg.
+	for _, m := range selected.All {
+		if err := m.Preflight(ctx); err != nil {
+			return fmt.Errorf("%s: %w", m.Name(), err)
+		}
 	}
 
 	// The pipeline runs in a goroutine launched by runTUI; it pushes
@@ -131,16 +144,30 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 			return
 		}
 
-		send(tui.PhaseStatusMsg(fmt.Sprintf("Calling %s (this can take 30–90s)…", m.Name())))
-		result, modelErr := m.Review(ctx, input)
-		if modelErr != nil {
-			send(tui.LoadErrorMsg{Err: modelErr})
+		send(tui.PhaseStatusMsg("Reviewing with selected models…"))
+		outcomes := runModelsInParallel(ctx, selected.All, input, send)
+		surviving, dropped := splitOutcomes(outcomes)
+
+		if len(surviving) == 0 {
+			send(tui.LoadErrorMsg{Err: aggregateErrors(dropped)})
 			return
+		}
+
+		final := surviving[0]
+		if len(surviving) >= 2 {
+			send(tui.PhaseStatusMsg(fmt.Sprintf("Synthesizing with %s…", selected.Lead.Name())))
+			synth, err := selected.Lead.Synthesize(ctx, input, surviving)
+			if err == nil {
+				final = synth
+			}
+			// On synthesis failure: silently fall back to surviving[0]
+			// (which is the lead's own pre-synthesis result, since
+			// surviving is priority-sorted). User still gets useful output.
 		}
 
 		send(tui.PhaseStatusMsg("Validating findings against the diff…"))
 		idx := diff.NewIndex(input.Files)
-		valid, quarantined := review.Validate(result.Findings, m.Name(), idx)
+		valid, quarantined := review.Validate(final.Findings, final.Model, idx)
 
 		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined})
 	}
@@ -188,6 +215,19 @@ func confirmPost(cmd *cobra.Command, n, prNumber int) bool {
 		return false
 	}
 	return b == 'y' || b == 'Y'
+}
+
+// aggregateErrors flattens dropped-model errors into a single error
+// for the case where ALL models failed.
+func aggregateErrors(dropped []modelOutcome) error {
+	if len(dropped) == 0 {
+		return fmt.Errorf("no models succeeded")
+	}
+	parts := make([]string, 0, len(dropped))
+	for _, d := range dropped {
+		parts = append(parts, fmt.Sprintf("%s: %v", d.Name, d.Err))
+	}
+	return fmt.Errorf("all selected models failed: %s", strings.Join(parts, "; "))
 }
 
 // writeFindings renders the post-TUI summary so approved findings can be

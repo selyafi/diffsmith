@@ -44,23 +44,30 @@ func newInboxCmd(registry *provider.Registry, models map[string]model.Model) *co
 			"This is also the default behavior of bare `diffsmith` (no subcommand).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInboxCommand(cmd, flags, registry, models)
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			items := preflightModels(ctx, models)
+			selected, err := pickerRunner(items, models)
+			if err != nil {
+				return err
+			}
+			return runInboxCommandWithSelected(cmd, flags, registry, selected)
 		},
 	}
-	cmd.Flags().StringVar(&flags.model, "model", "codex", "model adapter to use for opened reviews (codex, claude)")
 	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print GraphQL payload(s) instead of posting upstream when reviewing")
 	return cmd
 }
 
-// runInboxCommand is the cobra RunE shared by the `inbox` subcommand
-// and bare `diffsmith` (no subcommand). Owns the repo detection,
-// provider lookup, lister/opener setup, and delegates to runInbox.
-func runInboxCommand(cmd *cobra.Command, flags *reviewFlags, registry *provider.Registry, models map[string]model.Model) error {
+// runInboxCommandWithSelected is the cobra RunE shared by the `inbox`
+// subcommand and bare `diffsmith` (no subcommand). Both paths run the
+// picker upstream and pass the resolved SelectedModels here.
+func runInboxCommandWithSelected(cmd *cobra.Command, flags *reviewFlags, registry *provider.Registry, selected *model.SelectedModels) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
 	repo, err := repodetect.Detect()
 	if err != nil {
 		return err
@@ -71,7 +78,7 @@ func runInboxCommand(cmd *cobra.Command, flags *reviewFlags, registry *provider.
 	}
 
 	opener := func(ctx context.Context, cmd *cobra.Command, url string) error {
-		return runReviewByURL(ctx, cmd, url, flags, registry, models)
+		return runReviewByURL(ctx, cmd, url, flags, selected, registry)
 	}
 
 	var current *tui.InboxModel
