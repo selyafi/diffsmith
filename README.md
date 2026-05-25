@@ -112,25 +112,6 @@ For AI review:
 - No automatic patch application.
 - No team policy engine.
 
-## Documentation
-
-- [V1 Design Overview](docs/diffsmith-v1-design.md)
-- [Vision](docs/vision.md)
-- [V1 Scope](docs/v1-scope.md)
-- [Architecture](docs/architecture.md)
-- [TUI Workflow](docs/tui-workflow.md)
-- [Review Finding Schema](docs/review-finding-schema.md)
-- [Provider Adapters](docs/provider-adapters.md)
-- [Model Adapters](docs/model-adapters.md)
-- [Prompt Contract](docs/prompt-contract.md)
-- [Security and Privacy](docs/security-and-privacy.md)
-- [Confidence and Validation](docs/confidence-and-validation.md)
-- [Roadmap](docs/roadmap.md)
-- [Open Questions](docs/open-questions.md)
-- [Local Notes](docs/NOTES.md)
-- [Decisions](docs/decisions)
-- [Dev Plan](docs/dev-plan)
-
 ## License
 
 MIT — see [LICENSE](LICENSE). Diffsmith bundles no third-party code under a different license; runtime dependencies are listed in `go.mod`.
