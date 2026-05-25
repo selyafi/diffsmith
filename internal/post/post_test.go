@@ -446,7 +446,7 @@ func TestPoster_Submit_GitLabPostsInlineDiscussions(t *testing.T) {
 		t.Fatalf("expected 2 glab calls, got %d", len(*calls))
 	}
 
-	// First call should be: glab api projects/g%2Fp/merge_requests/3650/discussions ...
+	// Endpoint + flags assertions.
 	first := (*calls)[0].args
 	if first[0] != "api" {
 		t.Errorf("expected first arg `api`; got %v", first[0])
@@ -457,46 +457,63 @@ func TestPoster_Submit_GitLabPostsInlineDiscussions(t *testing.T) {
 	if !contains(first, "--method") || !contains(first, "POST") {
 		t.Errorf("expected --method POST; got %v", first)
 	}
-	// Position fields must all be present.
-	for _, want := range []string{
-		"position[base_sha]=base456",
-		"position[head_sha]=head123",
-		"position[start_sha]=start789",
-		"position[position_type]=text",
-		"position[new_path]=a.go",
-		"position[old_path]=a.go",
-		"position[new_line]=11",
-	} {
-		if !contains(first, want) {
-			t.Errorf("first call missing %q; args: %v", want, first)
-		}
+	if !contains(first, "--input") || !contains(first, "-") {
+		t.Errorf("expected --input -; got %v", first)
 	}
-	// Body should be present in a `body=...` form value containing the finding's suggested_comment.
-	bodyForm := ""
-	for _, a := range first {
-		if strings.HasPrefix(a, "body=") {
-			bodyForm = a
-			break
-		}
+	if !contains(first, "Content-Type: application/json") {
+		t.Errorf("expected Content-Type: application/json header; got %v", first)
 	}
-	if bodyForm == "" {
-		t.Fatalf("first call missing body=...; args: %v", first)
+
+	// Stdin must be a JSON object with body + nested position. This is the
+	// load-bearing assertion: glab's -F does NOT nest bracket syntax, so we
+	// must send the position as a proper sub-object via the request body.
+	var parsed struct {
+		Body     string `json:"body"`
+		Position struct {
+			BaseSHA      string `json:"base_sha"`
+			HeadSHA      string `json:"head_sha"`
+			StartSHA     string `json:"start_sha"`
+			PositionType string `json:"position_type"`
+			NewPath      string `json:"new_path"`
+			OldPath      string `json:"old_path"`
+			NewLine      int    `json:"new_line"`
+		} `json:"position"`
 	}
-	if !strings.Contains(bodyForm, "first") {
-		t.Errorf("body should contain 'first'; got: %s", bodyForm)
+	if err := json.Unmarshal([]byte((*calls)[0].stdin), &parsed); err != nil {
+		t.Fatalf("first call stdin is not valid JSON: %v; raw: %s", err, (*calls)[0].stdin)
+	}
+	if !strings.Contains(parsed.Body, "first") {
+		t.Errorf("body should contain 'first'; got: %s", parsed.Body)
+	}
+	if parsed.Position.BaseSHA != "base456" {
+		t.Errorf("position.base_sha = %q, want base456", parsed.Position.BaseSHA)
+	}
+	if parsed.Position.HeadSHA != "head123" {
+		t.Errorf("position.head_sha = %q, want head123", parsed.Position.HeadSHA)
+	}
+	if parsed.Position.StartSHA != "start789" {
+		t.Errorf("position.start_sha = %q, want start789", parsed.Position.StartSHA)
+	}
+	if parsed.Position.PositionType != "text" {
+		t.Errorf("position.position_type = %q, want text", parsed.Position.PositionType)
+	}
+	if parsed.Position.NewPath != "a.go" || parsed.Position.OldPath != "a.go" {
+		t.Errorf("position paths = (%q, %q), want (a.go, a.go)", parsed.Position.NewPath, parsed.Position.OldPath)
+	}
+	if parsed.Position.NewLine != 11 {
+		t.Errorf("position.new_line = %d, want 11", parsed.Position.NewLine)
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "Posted 2 comment(s)") {
-		t.Errorf("expected 'Posted 2 comment(s)' summary; got: %s", out)
+	if !strings.Contains(out, "Posted 2 inline thread(s)") {
+		t.Errorf("expected 'Posted 2 inline thread(s)' summary; got: %s", out)
 	}
 }
 
-func TestPoster_Submit_GitLabFallsBackToTopLevelNoteOnInlineFailure(t *testing.T) {
+func TestPoster_Submit_GitLabSurfacesInlineFailuresWithoutFallback(t *testing.T) {
 	calls := scriptedGlab(t, []ghResult{
-		// First finding: inline post fails (line moved); fallback to mr note succeeds.
-		{err: errors.New("glab: 400 line not in diff")},
-		{out: []byte("fallback note url")},
+		// First finding: inline post fails — must NOT fall back to top-level.
+		{err: errors.New("glab: exit 1: 400 Bad Request line not in diff")},
 		// Second finding: inline post succeeds.
 		{out: []byte(`{"id":"def"}`)},
 	})
@@ -519,17 +536,24 @@ func TestPoster_Submit_GitLabFallsBackToTopLevelNoteOnInlineFailure(t *testing.T
 	if err := p.Submit(context.Background(), target, findings); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if len(*calls) != 3 {
-		t.Fatalf("expected 3 glab calls (inline-fail, fallback-note, inline-ok); got %d", len(*calls))
+	// Exactly 2 glab calls: one per finding. No fallback call.
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 glab calls (one inline per finding, no fallback); got %d; args of each: %+v", len(*calls), *calls)
 	}
-	// Second call should be the fallback note.
-	second := (*calls)[1].args
-	if second[0] != "mr" || second[1] != "note" {
-		t.Errorf("expected second call to be fallback `glab mr note ...`; got %v", second)
+	for i, c := range *calls {
+		if c.args[0] != "api" {
+			t.Errorf("call %d expected `api` (inline post), got %q — fallback to non-api command is forbidden", i, c.args[0])
+		}
 	}
 	out := buf.String()
-	if !strings.Contains(out, "Posted 2 comment(s)") {
-		t.Errorf("expected 'Posted 2 comment(s)' summary; got: %s", out)
+	if !strings.Contains(out, "Posted: 1/2 (1 failed)") {
+		t.Errorf("expected summary 'Posted: 1/2 (1 failed)'; got: %s", out)
+	}
+	if !strings.Contains(out, "a.go:1") || !strings.Contains(out, "line not in diff") {
+		t.Errorf("expected failure summary to name a.go:1 with the glab error; got: %s", out)
+	}
+	if !strings.Contains(out, "Posted 1 inline thread(s)") {
+		t.Errorf("expected 'Posted 1 inline thread(s)' final line; got: %s", out)
 	}
 }
 
