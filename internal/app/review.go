@@ -134,6 +134,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 	// captures the per-session dependencies; nothing model-state-related
 	// is shared mutably across the goroutine boundary.
 	var input *review.ReviewInput
+	var runSummary string // populated by pipeline; read by writeFindings after runTUI returns
 	loader := tui.NewLoaderModel("Fetching diff…")
 	pipeline := func(send func(tea.Msg)) {
 		send(tui.PhaseStatusMsg("Fetching diff…"))
@@ -185,8 +186,8 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		idx := diff.NewIndex(input.Files)
 		valid, quarantined := review.Validate(final.Findings, final.Model, idx)
 
-		summary := buildRunSummary(selected.All, surviving, dropped, synthesisLeadName, len(final.Findings))
-		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined, RunSummary: summary})
+		runSummary = buildRunSummary(selected.All, surviving, dropped, synthesisLeadName, len(final.Findings))
+		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined, RunSummary: runSummary})
 	}
 	if err := runTUI(loader, pipeline); err != nil {
 		return err
@@ -213,7 +214,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		}
 	}
 
-	writeFindings(cmd.OutOrStdout(), loader.GetApprovedFindings(), loader.Quarantined(), loader.TotalReviewed(), loader.RunSummary())
+	writeFindings(cmd.OutOrStdout(), loader.GetApprovedFindings(), loader.Quarantined(), loader.TotalReviewed(), runSummary)
 	return nil
 }
 
