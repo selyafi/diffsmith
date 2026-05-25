@@ -29,6 +29,11 @@ var runGlab provider.Runner = provider.DefaultRunner
 type Poster struct {
 	// Out receives dry-run payloads and the resulting Review URL on submit.
 	Out io.Writer
+	// Repost, when true, bypasses the pre-post dedup step that skips
+	// findings whose (file, line) already has a diffsmith thread on the
+	// MR/PR. Use this for the explicit "I know there are duplicates and
+	// I want them anyway" path; the default behavior is to skip.
+	Repost bool
 }
 
 const queryResolvePRID = `query($owner:String!,$repo:String!,$number:Int!){
@@ -79,15 +84,25 @@ func (p *Poster) Submit(ctx context.Context, target review.ReviewTarget, finding
 	}
 
 	// Route by host. GitHub gets the four-phase GraphQL flow; GitLab
-	// gets top-level MR notes posted via `glab mr note` (inline review
-	// threads need position/SHA plumbing that's deferred to v1.x).
+	// gets inline review threads via the discussions API.
 	if target.Host == review.HostGitLab {
 		return p.submitGitLab(ctx, target, findings)
 	}
 
+	// Dedup: skip findings whose (file, line) already has a diffsmith
+	// thread on the PR. Best-effort — a fetch failure just means we
+	// post everything (better than aborting the whole flow on a
+	// transient GitHub API hiccup). Bypassed entirely when Repost=true.
+	findings = p.applyDedup(ctx, target, findings, fetchExistingGitHubKeys, runGH)
+
 	prID, err := resolvePRID(ctx, target)
 	if err != nil {
 		return fmt.Errorf("resolve PR ID: %w", err)
+	}
+	if len(findings) == 0 {
+		// Every finding was a duplicate. applyDedup already printed the
+		// summary; return cleanly without creating an empty review.
+		return nil
 	}
 
 	reviewID, err := beginReview(ctx, prID)
@@ -319,6 +334,16 @@ func (p *Poster) submitGitLab(ctx context.Context, target review.ReviewTarget, f
 			target.BaseSHA, target.HeadSHA, target.StartSHA)
 	}
 
+	// Dedup: skip findings whose (file, line) already has a diffsmith
+	// thread on the MR. Best-effort — fetch failure means we proceed
+	// with all findings (the user sees the fetch error printed, but
+	// the post still happens). Bypassed entirely when Repost=true.
+	findings = p.applyDedup(ctx, target, findings, fetchExistingGitLabKeys, runGlab)
+	if len(findings) == 0 {
+		// Every finding was a duplicate. applyDedup printed the summary.
+		return nil
+	}
+
 	repo := target.Owner + "/" + target.Repo
 	projectID := url.PathEscape(repo)
 	endpoint := fmt.Sprintf("projects/%s/merge_requests/%d/discussions", projectID, target.Number)
@@ -359,6 +384,40 @@ func (p *Poster) submitGitLab(ctx context.Context, target review.ReviewTarget, f
 
 	fmt.Fprintf(p.Out, "Posted %d inline thread(s) to %s MR !%d\n", posted, repo, target.Number)
 	return nil
+}
+
+// applyDedup is the shared dedup gate used by both submit paths.
+// Fetches existing diffsmith threads via the host-specific fetcher,
+// filters out duplicates, and prints a summary to p.Out. Returns the
+// filtered findings slice (or the original slice unchanged when
+// Repost=true or the fetch failed). The fetch error, if any, is
+// printed to p.Out so the user knows dedup was skipped — but never
+// returned, since a dedup failure should not block posting.
+func (p *Poster) applyDedup(
+	ctx context.Context,
+	target review.ReviewTarget,
+	findings []review.Finding,
+	fetcher func(context.Context, provider.Runner, review.ReviewTarget) (map[string]bool, error),
+	run provider.Runner,
+) []review.Finding {
+	if p.Repost {
+		fmt.Fprintln(p.Out, "Dedup disabled (--repost); posting all findings.")
+		return findings
+	}
+	existing, err := fetcher(ctx, run, target)
+	if err != nil {
+		fmt.Fprintf(p.Out, "Warning: could not fetch existing threads for dedup (%v); posting all findings.\n", err)
+		return findings
+	}
+	toPost, skipped := filterDuplicates(findings, existing)
+	if len(skipped) == 0 {
+		return toPost
+	}
+	fmt.Fprintf(p.Out, "Skipping %d finding(s) already posted (use --repost to override):\n", len(skipped))
+	for _, f := range skipped {
+		fmt.Fprintf(p.Out, "  %s:%d\n", f.File, f.Line)
+	}
+	return toPost
 }
 
 // formatGitLabNote renders a finding into a GitLab Markdown body.

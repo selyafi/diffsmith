@@ -35,14 +35,19 @@ var runTUI = func(loader *tui.LoaderModel, pipeline func(send func(tea.Msg))) er
 // submitPost is the seam between runReview and the GitHub poster. Tests
 // swap this to assert whether the Submit branch ran (and with what
 // findings) without shelling out to gh. Mirrors the runTUI pattern.
-var submitPost = func(ctx context.Context, out io.Writer, target review.ReviewTarget, marked []review.Finding) error {
-	return (&post.Poster{Out: out}).Submit(ctx, target, marked)
+var submitPost = func(ctx context.Context, out io.Writer, target review.ReviewTarget, marked []review.Finding, repost bool) error {
+	return (&post.Poster{Out: out, Repost: repost}).Submit(ctx, target, marked)
 }
 
 type reviewFlags struct {
 	dryRun       bool
 	printPrompt  bool
 	printPayload bool
+	// repost bypasses the dedup-before-post step so every approved
+	// finding is sent to the host API even if a diffsmith thread
+	// already exists at the same (file, line). Default false:
+	// duplicates are skipped with a summary line.
+	repost bool
 }
 
 func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *cobra.Command {
@@ -79,6 +84,7 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "fetch and normalize the diff, then stop before the model call")
 	cmd.Flags().BoolVar(&flags.printPrompt, "print-prompt", false, "print the model prompt and exit without invoking the model")
 	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print the GraphQL payload(s) for findings marked with 'p' in the TUI, instead of posting upstream")
+	cmd.Flags().BoolVar(&flags.repost, "repost", false, "bypass dedup and post every approved finding even if a diffsmith thread already exists at the same file:line")
 
 	return cmd
 }

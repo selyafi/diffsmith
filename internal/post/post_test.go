@@ -42,7 +42,7 @@ func TestPoster_Submit_OrchestratesFourPhaseGraphQLFlow(t *testing.T) {
 	calls := scriptedGH(t, responses)
 
 	var buf bytes.Buffer
-	p := &Poster{Out: &buf}
+	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 	target := review.ReviewTarget{
 		Owner:   "owner",
 		Repo:    "repo",
@@ -109,7 +109,7 @@ func sliceEqual(a, b []string) bool {
 
 func TestPoster_PrintPayload_WritesOneAnchoredJSONPerFinding(t *testing.T) {
 	var buf bytes.Buffer
-	p := &Poster{Out: &buf}
+	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 	target := review.ReviewTarget{
 		Owner:   "owner",
 		Repo:    "repo",
@@ -204,7 +204,7 @@ func TestPoster_Submit_ContinuesAfterPartialThreadFailure(t *testing.T) {
 	calls := scriptedGHResults(t, results)
 
 	var buf bytes.Buffer
-	p := &Poster{Out: &buf}
+	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 	target := review.ReviewTarget{Owner: "owner", Repo: "repo", Number: 42, HeadSHA: "a1b2c3d4"}
 	findings := []review.Finding{
 		{File: "f1.go", Line: 10, Severity: review.SeverityHigh, Title: "T1", SuggestedComment: "C1"},
@@ -265,7 +265,7 @@ func TestPoster_Submit_DeletesPendingReviewWhenAllThreadsFail(t *testing.T) {
 	calls := scriptedGHResults(t, results)
 
 	var buf bytes.Buffer
-	p := &Poster{Out: &buf}
+	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 	target := review.ReviewTarget{Owner: "owner", Repo: "repo", Number: 42, HeadSHA: "sha"}
 	findings := []review.Finding{
 		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T1", SuggestedComment: "C1"},
@@ -347,7 +347,7 @@ func TestPoster_Submit_RoutesGraphQLBodyErrorsThroughFailureSummary(t *testing.T
 	scriptedGHResults(t, results)
 
 	var buf bytes.Buffer
-	p := &Poster{Out: &buf}
+	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 	target := review.ReviewTarget{Owner: "owner", Repo: "repo", Number: 42, HeadSHA: "sha"}
 	findings := []review.Finding{
 		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T1", SuggestedComment: "C1"},
@@ -375,7 +375,7 @@ func TestPoster_Submit_RoutesGraphQLBodyErrorsThroughFailureSummary(t *testing.T
 
 func TestPoster_PrintPayload_EmptyFindingsWritesNothing(t *testing.T) {
 	var buf bytes.Buffer
-	p := &Poster{Out: &buf}
+	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 
 	if err := p.PrintPayload(review.ReviewTarget{HeadSHA: "x"}, nil); err != nil {
 		t.Fatalf("PrintPayload: %v", err)
@@ -424,7 +424,7 @@ func TestPoster_Submit_GitLabPostsInlineDiscussions(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	p := &Poster{Out: &buf}
+	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 	target := review.ReviewTarget{
 		Host:     review.HostGitLab,
 		Owner:    "g",
@@ -519,7 +519,7 @@ func TestPoster_Submit_GitLabSurfacesInlineFailuresWithoutFallback(t *testing.T)
 	})
 
 	var buf bytes.Buffer
-	p := &Poster{Out: &buf}
+	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 	target := review.ReviewTarget{
 		Host:     review.HostGitLab,
 		Owner:    "g",
@@ -559,7 +559,7 @@ func TestPoster_Submit_GitLabSurfacesInlineFailuresWithoutFallback(t *testing.T)
 
 func TestPoster_Submit_GitLabRequiresDiffRefs(t *testing.T) {
 	var buf bytes.Buffer
-	p := &Poster{Out: &buf}
+	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 	target := review.ReviewTarget{
 		Host:   review.HostGitLab,
 		Owner:  "g",
