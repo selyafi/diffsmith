@@ -19,6 +19,10 @@ import (
 // and internal/app rather than threading a Runner through every call.
 var runGH provider.Runner = provider.DefaultRunner
 
+// runGlab is the GitLab equivalent of runGH; used by submitGitLab when
+// the review target is a GitLab MR.
+var runGlab provider.Runner = provider.DefaultRunner
+
 // Poster submits approved review findings to GitHub as inline PR review
 // comments grouped under a single Review.
 type Poster struct {
@@ -71,6 +75,13 @@ type threadFailure struct {
 func (p *Poster) Submit(ctx context.Context, target review.ReviewTarget, findings []review.Finding) error {
 	if len(findings) == 0 {
 		return nil
+	}
+
+	// Route by host. GitHub gets the four-phase GraphQL flow; GitLab
+	// gets top-level MR notes posted via `glab mr note` (inline review
+	// threads need position/SHA plumbing that's deferred to v1.x).
+	if target.Host == review.HostGitLab {
+		return p.submitGitLab(ctx, target, findings)
 	}
 
 	prID, err := resolvePRID(ctx, target)
@@ -283,6 +294,51 @@ func submitReview(ctx context.Context, reviewID string) (string, error) {
 		return "", fmt.Errorf("decode submit response: %w", err)
 	}
 	return resp.Data.SubmitPullRequestReview.PullRequestReview.URL, nil
+}
+
+// submitGitLab posts each finding as a top-level MR note via `glab mr
+// note`. Inline review threads need position/SHA plumbing that's
+// deferred to v1.x; this version posts one note per finding with the
+// file:line context inline in the body.
+//
+// Mirrors Submit's "best effort batch" behavior: per-finding failures
+// don't abort the run. A summary is written to p.Out at the end.
+func (p *Poster) submitGitLab(ctx context.Context, target review.ReviewTarget, findings []review.Finding) error {
+	repo := target.Owner + "/" + target.Repo
+	iid := fmt.Sprintf("%d", target.Number)
+
+	var failures []threadFailure
+	for _, f := range findings {
+		body := formatGitLabNote(f)
+		if _, err := runGlab(ctx, nil, "glab", "mr", "note", iid, "--repo", repo, "--message", body); err != nil {
+			failures = append(failures, threadFailure{finding: f, err: err})
+		}
+	}
+
+	posted := len(findings) - len(failures)
+	p.writeSummary(posted, len(findings), failures)
+
+	if posted == 0 {
+		return fmt.Errorf("post review: all %d findings failed: %w",
+			len(findings), joinFailureErrors(failures))
+	}
+
+	fmt.Fprintf(p.Out, "Posted %d note(s) to %s MR !%d\n", posted, repo, target.Number)
+	return nil
+}
+
+// formatGitLabNote renders a finding into a GitLab Markdown note body.
+// Includes file:line context (since top-level notes aren't position-
+// anchored), severity, model, confidence, and the suggested comment.
+func formatGitLabNote(f review.Finding) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "**`%s:%d`** (%s, model: %s, confidence: %.0f%%)\n\n",
+		f.File, f.Line, f.Severity, f.Model, f.Confidence*100)
+	b.WriteString(f.SuggestedComment)
+	if f.FixHint != "" {
+		fmt.Fprintf(&b, "\n\n*Fix hint:* %s", f.FixHint)
+	}
+	return b.String()
 }
 
 // PrintPayload writes the addPullRequestReviewThread input as one JSON

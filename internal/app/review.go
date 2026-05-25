@@ -206,7 +206,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		switch {
 		case flags.printPayload:
 			postErr = (&post.Poster{Out: cmd.OutOrStdout()}).PrintPayload(input.Target, marked)
-		case confirmPost(cmd, len(marked), input.Target.Number):
+		case confirmPost(cmd, len(marked), input.Target):
 			postErr = submitPost(ctx, cmd.OutOrStdout(), input.Target, marked)
 		}
 		if postErr != nil {
@@ -224,10 +224,16 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 // bails safely; EOF (empty stdin) also bails so an unattached terminal
 // can never auto-confirm. Capital and lowercase Y are both accepted so
 // users don't have to switch shift state to confirm.
-func confirmPost(cmd *cobra.Command, n, prNumber int) bool {
+func confirmPost(cmd *cobra.Command, n int, target review.ReviewTarget) bool {
+	// GitHub uses "PR #N", GitLab uses "MR !N" — match the platform's
+	// own convention so users see familiar language.
+	label := fmt.Sprintf("PR #%d", target.Number)
+	if target.Host == review.HostGitLab {
+		label = fmt.Sprintf("MR !%d", target.Number)
+	}
 	fmt.Fprintf(cmd.OutOrStdout(),
-		"About to post %d comment(s) to PR #%d. Press y to confirm, anything else to abort.\n",
-		n, prNumber)
+		"About to post %d comment(s) to %s. Press y to confirm, anything else to abort.\n",
+		n, label)
 	b, err := bufio.NewReader(cmd.InOrStdin()).ReadByte()
 	if err != nil {
 		return false

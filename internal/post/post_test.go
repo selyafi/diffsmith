@@ -384,3 +384,129 @@ func TestPoster_PrintPayload_EmptyFindingsWritesNothing(t *testing.T) {
 		t.Errorf("empty findings produced output: %q", buf.String())
 	}
 }
+
+// scriptedGlab installs runGlab with a canned-response stub mirroring
+// scriptedGH. Used by the GitLab MR posting tests.
+func scriptedGlab(t *testing.T, results []ghResult) *[]recordedGHCall {
+	t.Helper()
+	prev := runGlab
+	t.Cleanup(func() { runGlab = prev })
+
+	var calls []recordedGHCall
+	i := 0
+	runGlab = func(_ context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {
+		if name != "glab" {
+			t.Errorf("unexpected command: %s", name)
+		}
+		var body []byte
+		if stdin != nil {
+			b, _ := io.ReadAll(stdin)
+			body = b
+		}
+		calls = append(calls, recordedGHCall{
+			args:  append([]string(nil), args...),
+			stdin: string(body),
+		})
+		if i >= len(results) {
+			t.Fatalf("unexpected call #%d: %s %v", i+1, name, args)
+		}
+		r := results[i]
+		i++
+		return r.out, r.err
+	}
+	return &calls
+}
+
+func TestPoster_Submit_GitLabUsesGlabMrNote(t *testing.T) {
+	calls := scriptedGlab(t, []ghResult{
+		{out: []byte("https://gitlab.com/g/p/-/merge_requests/3650#note_1")},
+		{out: []byte("https://gitlab.com/g/p/-/merge_requests/3650#note_2")},
+	})
+
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf}
+	target := review.ReviewTarget{
+		Host:   review.HostGitLab,
+		Owner:  "g",
+		Repo:   "p",
+		Number: 3650,
+	}
+	findings := []review.Finding{
+		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Model: "codex", Confidence: 0.9, SuggestedComment: "first"},
+		{File: "b.go", Line: 2, Severity: review.SeverityLow, Model: "claude", Confidence: 0.7, SuggestedComment: "second"},
+	}
+
+	if err := p.Submit(context.Background(), target, findings); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 glab calls, got %d", len(*calls))
+	}
+	first := (*calls)[0].args
+	if first[0] != "mr" || first[1] != "note" || first[2] != "3650" {
+		t.Errorf("expected `glab mr note 3650 ...`; got %v", first)
+	}
+	if !contains(first, "--repo") || !contains(first, "g/p") {
+		t.Errorf("expected --repo g/p in args; got %v", first)
+	}
+	if !contains(first, "--message") {
+		t.Errorf("expected --message flag; got %v", first)
+	}
+	// Body for first finding should include file:line + suggested_comment.
+	bodyIdx := -1
+	for i, a := range first {
+		if a == "--message" && i+1 < len(first) {
+			bodyIdx = i + 1
+			break
+		}
+	}
+	if bodyIdx < 0 {
+		t.Fatal("--message argument missing a body value")
+	}
+	body := first[bodyIdx]
+	if !strings.Contains(body, "a.go:1") || !strings.Contains(body, "first") {
+		t.Errorf("expected body to contain 'a.go:1' and 'first'; got: %s", body)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Posted 2 note(s)") {
+		t.Errorf("expected summary line in output; got: %s", out)
+	}
+}
+
+func TestPoster_Submit_GitLabPartialFailure(t *testing.T) {
+	scriptedGlab(t, []ghResult{
+		{out: []byte("note url")},
+		{err: errors.New("glab: exit 1: 403 forbidden")},
+	})
+
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf}
+	target := review.ReviewTarget{
+		Host:   review.HostGitLab,
+		Owner:  "g",
+		Repo:   "p",
+		Number: 1,
+	}
+	findings := []review.Finding{
+		{File: "a.go", Line: 1, SuggestedComment: "ok"},
+		{File: "b.go", Line: 2, SuggestedComment: "fail"},
+	}
+
+	if err := p.Submit(context.Background(), target, findings); err != nil {
+		t.Fatalf("Submit should not error when ≥1 finding succeeds; got %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Posted 1 note(s)") {
+		t.Errorf("expected 'Posted 1 note(s)' summary; got: %s", out)
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
