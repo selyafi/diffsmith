@@ -51,14 +51,22 @@ func (a *Adapter) Preflight(_ context.Context) error {
 	return nil
 }
 
-// Review invokes gemini with `-o text`. Stdin piping, JSON shape, and
-// validation are prompt-engineered (see prompt-contract.md): the model
-// is instructed to emit a {"findings":[...]} JSON object as its entire
-// response, so text mode returns exactly that.
+// Review invokes gemini with `-o text --skip-trust`. Stdin piping,
+// JSON shape, and validation are prompt-engineered (see
+// prompt-contract.md): the model is instructed to emit a
+// {"findings":[...]} JSON object as its entire response, so text mode
+// returns exactly that.
 //
 // We deliberately do NOT use `-o json`, which wraps the model output in
 // a {"response": ..., "stats": ...} envelope. That envelope would have
 // to be unwrapped before parsing; text mode skips that step.
+//
+// --skip-trust bypasses gemini's per-directory workspace-trust gate.
+// Diffsmith pipes the full diff via stdin and gemini never reads files
+// from the CWD, so the trust check has no semantic meaning here — and
+// without the flag, gemini exits 55 ("not running in a trusted
+// directory") whenever diffsmith is run from a repo the user hasn't
+// trusted via gemini's interactive prompt.
 func (a *Adapter) Review(ctx context.Context, input *review.ReviewInput) (*review.ModelReviewResult, error) {
 	return a.executeWithPrompt(ctx, model.BuildPrompt(input))
 }
@@ -78,7 +86,7 @@ func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review
 			len(prompt), DefaultInputBudgetBytes, a.Name())
 	}
 
-	out, err := a.run(ctx, strings.NewReader(prompt), "gemini", "-o", "text")
+	out, err := a.run(ctx, strings.NewReader(prompt), "gemini", "-o", "text", "--skip-trust")
 	if err != nil {
 		return nil, fmt.Errorf("gemini: %w", err)
 	}

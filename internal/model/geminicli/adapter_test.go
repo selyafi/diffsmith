@@ -73,7 +73,7 @@ func TestReviewSuccess(t *testing.T) {
 		if name != "gemini" {
 			t.Errorf("called %q, want gemini", name)
 		}
-		expectedArgs := []string{"-o", "text"}
+		expectedArgs := []string{"-o", "text", "--skip-trust"}
 		if len(args) != len(expectedArgs) {
 			t.Errorf("got %d args, want %d", len(args), len(expectedArgs))
 		}
