@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 
 	"github.com/selyafi/diffsmith/internal/provider"
@@ -296,22 +297,48 @@ func submitReview(ctx context.Context, reviewID string) (string, error) {
 	return resp.Data.SubmitPullRequestReview.PullRequestReview.URL, nil
 }
 
-// submitGitLab posts each finding as a top-level MR note via `glab mr
-// note`. Inline review threads need position/SHA plumbing that's
-// deferred to v1.x; this version posts one note per finding with the
-// file:line context inline in the body.
+// submitGitLab posts each finding as an inline review thread via
+// GitLab's discussions API (positioned at file:new_line in the diff
+// view). Falls back to a top-level MR note when the inline post fails
+// — most commonly because the line was modified between fetch and
+// post, so GitLab rejects the position.
 //
 // Mirrors Submit's "best effort batch" behavior: per-finding failures
 // don't abort the run. A summary is written to p.Out at the end.
 func (p *Poster) submitGitLab(ctx context.Context, target review.ReviewTarget, findings []review.Finding) error {
+	if target.BaseSHA == "" || target.HeadSHA == "" || target.StartSHA == "" {
+		return fmt.Errorf("gitlab: missing diff-refs (base=%q head=%q start=%q); cannot anchor inline threads",
+			target.BaseSHA, target.HeadSHA, target.StartSHA)
+	}
+
 	repo := target.Owner + "/" + target.Repo
-	iid := fmt.Sprintf("%d", target.Number)
+	projectID := url.PathEscape(repo)
+	endpoint := fmt.Sprintf("projects/%s/merge_requests/%d/discussions", projectID, target.Number)
 
 	var failures []threadFailure
 	for _, f := range findings {
 		body := formatGitLabNote(f)
-		if _, err := runGlab(ctx, nil, "glab", "mr", "note", iid, "--repo", repo, "--message", body); err != nil {
-			failures = append(failures, threadFailure{finding: f, err: err})
+		args := []string{
+			"api", endpoint, "--method", "POST",
+			"-F", "body=" + body,
+			"-F", "position[base_sha]=" + target.BaseSHA,
+			"-F", "position[head_sha]=" + target.HeadSHA,
+			"-F", "position[start_sha]=" + target.StartSHA,
+			"-F", "position[position_type]=text",
+			"-F", "position[new_path]=" + f.File,
+			"-F", "position[old_path]=" + f.File,
+			"-F", fmt.Sprintf("position[new_line]=%d", f.Line),
+		}
+		if _, err := runGlab(ctx, nil, "glab", args...); err != nil {
+			// Inline post failed (often: line not in current diff
+			// because it moved). Fall back to a top-level MR note so
+			// the comment still reaches the reviewer, with file:line
+			// context in the body.
+			if _, fallbackErr := runGlab(ctx, nil, "glab", "mr", "note",
+				fmt.Sprintf("%d", target.Number), "--repo", repo,
+				"--message", body); fallbackErr != nil {
+				failures = append(failures, threadFailure{finding: f, err: fmt.Errorf("inline: %w; fallback note: %v", err, fallbackErr)})
+			}
 		}
 	}
 
@@ -323,17 +350,18 @@ func (p *Poster) submitGitLab(ctx context.Context, target review.ReviewTarget, f
 			len(findings), joinFailureErrors(failures))
 	}
 
-	fmt.Fprintf(p.Out, "Posted %d note(s) to %s MR !%d\n", posted, repo, target.Number)
+	fmt.Fprintf(p.Out, "Posted %d comment(s) to %s MR !%d\n", posted, repo, target.Number)
 	return nil
 }
 
-// formatGitLabNote renders a finding into a GitLab Markdown note body.
-// Includes file:line context (since top-level notes aren't position-
-// anchored), severity, model, confidence, and the suggested comment.
+// formatGitLabNote renders a finding into a GitLab Markdown body.
+// The inline thread is already anchored at file:line via the position
+// fields, so the body leads with severity/model/confidence metadata,
+// then the suggested comment, then the fix hint.
 func formatGitLabNote(f review.Finding) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "**`%s:%d`** (%s, model: %s, confidence: %.0f%%)\n\n",
-		f.File, f.Line, f.Severity, f.Model, f.Confidence*100)
+	fmt.Fprintf(&b, "**diffsmith review** — %s, model: %s, confidence: %.0f%%\n\n",
+		f.Severity, f.Model, f.Confidence*100)
 	b.WriteString(f.SuggestedComment)
 	if f.FixHint != "" {
 		fmt.Fprintf(&b, "\n\n*Fix hint:* %s", f.FixHint)

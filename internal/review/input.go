@@ -16,15 +16,21 @@ const (
 // capture-time anchor used when posting review comments back upstream —
 // re-resolving at post time would risk silently re-anchoring to a moved
 // HEAD if the PR got pushed mid-review.
+//
+// BaseSHA and StartSHA are the GitLab diff-refs required to post inline
+// review threads (positioned at file:line in the diff view). GitHub uses
+// HeadSHA alone; for GitLab we need all three. Empty for GitHub targets.
 type ReviewTarget struct {
-	Host    Host
-	URL     string
-	Owner   string
-	Repo    string
-	Number  int
-	HeadRef string
-	HeadSHA string
-	BaseRef string
+	Host     Host
+	URL      string
+	Owner    string
+	Repo     string
+	Number   int
+	HeadRef  string
+	HeadSHA  string
+	BaseRef  string
+	BaseSHA  string
+	StartSHA string
 }
 
 // ReviewInput is the normalized input the review core consumes. Provider

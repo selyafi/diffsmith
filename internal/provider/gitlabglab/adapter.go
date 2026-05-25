@@ -86,14 +86,16 @@ func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*review.ReviewInput
 	owner, repo := splitProjectPath(ref.ProjectPath)
 	return &review.ReviewInput{
 		Target: review.ReviewTarget{
-			Host:    review.HostGitLab,
-			URL:     ref.URL,
-			Owner:   owner,
-			Repo:    repo,
-			Number:  ref.Number,
-			HeadRef: meta.SourceBranch,
-			HeadSHA: meta.SHA,
-			BaseRef: meta.TargetBranch,
+			Host:     review.HostGitLab,
+			URL:      ref.URL,
+			Owner:    owner,
+			Repo:     repo,
+			Number:   ref.Number,
+			HeadRef:  meta.SourceBranch,
+			HeadSHA:  meta.SHA,
+			BaseRef:  meta.TargetBranch,
+			BaseSHA:  meta.DiffRefs.BaseSHA,
+			StartSHA: meta.DiffRefs.StartSHA,
 		},
 		Title:   meta.Title,
 		Author:  meta.Author.Username,
@@ -118,6 +120,14 @@ type mrMetadata struct {
 	TargetBranch string `json:"target_branch"`
 	SHA          string `json:"sha"`
 	WebURL       string `json:"web_url"`
+	// DiffRefs carries the SHAs needed to position inline review
+	// threads via GitLab's discussions API. All three are required
+	// when posting a thread at a specific file:line.
+	DiffRefs struct {
+		BaseSHA  string `json:"base_sha"`
+		HeadSHA  string `json:"head_sha"`
+		StartSHA string `json:"start_sha"`
+	} `json:"diff_refs"`
 }
 
 func (a *Adapter) fetchMetadata(ctx context.Context, ref *MergeRequestRef) (*mrMetadata, error) {

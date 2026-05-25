@@ -417,23 +417,26 @@ func scriptedGlab(t *testing.T, results []ghResult) *[]recordedGHCall {
 	return &calls
 }
 
-func TestPoster_Submit_GitLabUsesGlabMrNote(t *testing.T) {
+func TestPoster_Submit_GitLabPostsInlineDiscussions(t *testing.T) {
 	calls := scriptedGlab(t, []ghResult{
-		{out: []byte("https://gitlab.com/g/p/-/merge_requests/3650#note_1")},
-		{out: []byte("https://gitlab.com/g/p/-/merge_requests/3650#note_2")},
+		{out: []byte(`{"id":"abc","notes":[{"id":1}]}`)},
+		{out: []byte(`{"id":"def","notes":[{"id":2}]}`)},
 	})
 
 	var buf bytes.Buffer
 	p := &Poster{Out: &buf}
 	target := review.ReviewTarget{
-		Host:   review.HostGitLab,
-		Owner:  "g",
-		Repo:   "p",
-		Number: 3650,
+		Host:     review.HostGitLab,
+		Owner:    "g",
+		Repo:     "p",
+		Number:   3650,
+		HeadSHA:  "head123",
+		BaseSHA:  "base456",
+		StartSHA: "start789",
 	}
 	findings := []review.Finding{
-		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Model: "codex", Confidence: 0.9, SuggestedComment: "first"},
-		{File: "b.go", Line: 2, Severity: review.SeverityLow, Model: "claude", Confidence: 0.7, SuggestedComment: "second"},
+		{File: "a.go", Line: 11, Severity: review.SeverityHigh, Model: "codex", Confidence: 0.9, SuggestedComment: "first"},
+		{File: "b.go", Line: 22, Severity: review.SeverityLow, Model: "claude", Confidence: 0.7, SuggestedComment: "second"},
 	}
 
 	if err := p.Submit(context.Background(), target, findings); err != nil {
@@ -442,44 +445,95 @@ func TestPoster_Submit_GitLabUsesGlabMrNote(t *testing.T) {
 	if len(*calls) != 2 {
 		t.Fatalf("expected 2 glab calls, got %d", len(*calls))
 	}
+
+	// First call should be: glab api projects/g%2Fp/merge_requests/3650/discussions ...
 	first := (*calls)[0].args
-	if first[0] != "mr" || first[1] != "note" || first[2] != "3650" {
-		t.Errorf("expected `glab mr note 3650 ...`; got %v", first)
+	if first[0] != "api" {
+		t.Errorf("expected first arg `api`; got %v", first[0])
 	}
-	if !contains(first, "--repo") || !contains(first, "g/p") {
-		t.Errorf("expected --repo g/p in args; got %v", first)
+	if first[1] != "projects/g%2Fp/merge_requests/3650/discussions" {
+		t.Errorf("unexpected endpoint: %q", first[1])
 	}
-	if !contains(first, "--message") {
-		t.Errorf("expected --message flag; got %v", first)
+	if !contains(first, "--method") || !contains(first, "POST") {
+		t.Errorf("expected --method POST; got %v", first)
 	}
-	// Body for first finding should include file:line + suggested_comment.
-	bodyIdx := -1
-	for i, a := range first {
-		if a == "--message" && i+1 < len(first) {
-			bodyIdx = i + 1
+	// Position fields must all be present.
+	for _, want := range []string{
+		"position[base_sha]=base456",
+		"position[head_sha]=head123",
+		"position[start_sha]=start789",
+		"position[position_type]=text",
+		"position[new_path]=a.go",
+		"position[old_path]=a.go",
+		"position[new_line]=11",
+	} {
+		if !contains(first, want) {
+			t.Errorf("first call missing %q; args: %v", want, first)
+		}
+	}
+	// Body should be present in a `body=...` form value containing the finding's suggested_comment.
+	bodyForm := ""
+	for _, a := range first {
+		if strings.HasPrefix(a, "body=") {
+			bodyForm = a
 			break
 		}
 	}
-	if bodyIdx < 0 {
-		t.Fatal("--message argument missing a body value")
+	if bodyForm == "" {
+		t.Fatalf("first call missing body=...; args: %v", first)
 	}
-	body := first[bodyIdx]
-	if !strings.Contains(body, "a.go:1") || !strings.Contains(body, "first") {
-		t.Errorf("expected body to contain 'a.go:1' and 'first'; got: %s", body)
+	if !strings.Contains(bodyForm, "first") {
+		t.Errorf("body should contain 'first'; got: %s", bodyForm)
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "Posted 2 note(s)") {
-		t.Errorf("expected summary line in output; got: %s", out)
+	if !strings.Contains(out, "Posted 2 comment(s)") {
+		t.Errorf("expected 'Posted 2 comment(s)' summary; got: %s", out)
 	}
 }
 
-func TestPoster_Submit_GitLabPartialFailure(t *testing.T) {
-	scriptedGlab(t, []ghResult{
-		{out: []byte("note url")},
-		{err: errors.New("glab: exit 1: 403 forbidden")},
+func TestPoster_Submit_GitLabFallsBackToTopLevelNoteOnInlineFailure(t *testing.T) {
+	calls := scriptedGlab(t, []ghResult{
+		// First finding: inline post fails (line moved); fallback to mr note succeeds.
+		{err: errors.New("glab: 400 line not in diff")},
+		{out: []byte("fallback note url")},
+		// Second finding: inline post succeeds.
+		{out: []byte(`{"id":"def"}`)},
 	})
 
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf}
+	target := review.ReviewTarget{
+		Host:     review.HostGitLab,
+		Owner:    "g",
+		Repo:     "p",
+		Number:   1,
+		HeadSHA:  "h",
+		BaseSHA:  "b",
+		StartSHA: "s",
+	}
+	findings := []review.Finding{
+		{File: "a.go", Line: 1, SuggestedComment: "first"},
+		{File: "b.go", Line: 2, SuggestedComment: "second"},
+	}
+	if err := p.Submit(context.Background(), target, findings); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(*calls) != 3 {
+		t.Fatalf("expected 3 glab calls (inline-fail, fallback-note, inline-ok); got %d", len(*calls))
+	}
+	// Second call should be the fallback note.
+	second := (*calls)[1].args
+	if second[0] != "mr" || second[1] != "note" {
+		t.Errorf("expected second call to be fallback `glab mr note ...`; got %v", second)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Posted 2 comment(s)") {
+		t.Errorf("expected 'Posted 2 comment(s)' summary; got: %s", out)
+	}
+}
+
+func TestPoster_Submit_GitLabRequiresDiffRefs(t *testing.T) {
 	var buf bytes.Buffer
 	p := &Poster{Out: &buf}
 	target := review.ReviewTarget{
@@ -487,18 +541,13 @@ func TestPoster_Submit_GitLabPartialFailure(t *testing.T) {
 		Owner:  "g",
 		Repo:   "p",
 		Number: 1,
+		// All SHAs intentionally empty.
 	}
-	findings := []review.Finding{
-		{File: "a.go", Line: 1, SuggestedComment: "ok"},
-		{File: "b.go", Line: 2, SuggestedComment: "fail"},
-	}
-
-	if err := p.Submit(context.Background(), target, findings); err != nil {
-		t.Fatalf("Submit should not error when ≥1 finding succeeds; got %v", err)
-	}
-	out := buf.String()
-	if !strings.Contains(out, "Posted 1 note(s)") {
-		t.Errorf("expected 'Posted 1 note(s)' summary; got: %s", out)
+	err := p.Submit(context.Background(),
+		target,
+		[]review.Finding{{File: "a.go", Line: 1, SuggestedComment: "c"}})
+	if err == nil || !strings.Contains(err.Error(), "missing diff-refs") {
+		t.Errorf("expected 'missing diff-refs' error; got %v", err)
 	}
 }
 
