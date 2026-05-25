@@ -12,7 +12,7 @@ import (
 // Kind narrows the cause for actionable error messages; Raw is a
 // truncated copy of the offending output for debug surfaces.
 type ParseError struct {
-	Kind  string // "markdown_fence" | "prose_preamble" | "invalid_json" | "wrong_shape"
+	Kind  string // "prose_preamble" | "invalid_json" | "wrong_shape"
 	Raw   string
 	Cause error
 }
@@ -28,15 +28,16 @@ func (e *ParseError) Unwrap() error { return e.Cause }
 
 // ParseFindings turns raw model stdout into review.FindingCandidate values.
 //
-// The contract from docs/prompt-contract.md is strict: JSON only, no
-// markdown fences, no prose preamble. Violations return *ParseError so
-// callers can surface a categorized message instead of a stack trace.
+// The contract from docs/prompt-contract.md is strict JSON, but reality
+// is that some CLIs (notably gemini) wrap their output in markdown code
+// fences despite the prompt forbidding them. Rather than rejecting
+// fenced output and failing the whole review, stripMarkdownFences
+// peels the wrapper before parsing. Any other deviation (prose
+// preamble, malformed JSON, missing findings key) still returns a
+// categorized *ParseError so callers can surface a useful message.
 func ParseFindings(raw []byte) ([]review.FindingCandidate, error) {
-	trimmed := strings.TrimSpace(string(raw))
+	trimmed := stripMarkdownFences(string(raw))
 
-	if strings.HasPrefix(trimmed, "```") {
-		return nil, &ParseError{Kind: "markdown_fence", Raw: truncate(trimmed, 200)}
-	}
 	if !strings.HasPrefix(trimmed, "{") {
 		return nil, &ParseError{Kind: "prose_preamble", Raw: truncate(trimmed, 200)}
 	}
@@ -71,4 +72,28 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// stripMarkdownFences removes a leading ```lang\n (or ```\n) and a
+// trailing \n``` from s, if both are present. Returns the input
+// whitespace-trimmed when no fences are detected, so well-behaved
+// outputs pass through unchanged. Only the outermost fence pair is
+// stripped — nested fences inside the JSON body are preserved.
+func stripMarkdownFences(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "```") {
+		return s
+	}
+	// Drop the opening fence line up to and including the first
+	// newline. This handles both ```json\n and ```\n forms.
+	if newline := strings.IndexByte(s, '\n'); newline >= 0 {
+		s = s[newline+1:]
+	} else {
+		// Single-line fenced output (no newline) — just drop the
+		// opening backticks and let later parsing decide.
+		s = strings.TrimPrefix(s, "```")
+	}
+	s = strings.TrimRightFunc(s, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' })
+	s = strings.TrimSuffix(s, "```")
+	return strings.TrimSpace(s)
 }

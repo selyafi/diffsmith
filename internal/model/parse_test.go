@@ -46,15 +46,41 @@ func TestParseFindingsEmpty(t *testing.T) {
 	}
 }
 
-func TestParseFindingsRejectsMarkdownFence(t *testing.T) {
+// TestParseFindingsStripsJSONFence verifies that the most common gemini
+// drift — wrapping the JSON envelope in a ```json ... ``` block —
+// is silently stripped and parsed. Without this, gemini reviews fail
+// even when the underlying JSON is structurally valid.
+func TestParseFindingsStripsJSONFence(t *testing.T) {
 	raw := []byte("```json\n{\"findings\":[]}\n```")
-	_, err := ParseFindings(raw)
-	var pe *ParseError
-	if !errors.As(err, &pe) {
-		t.Fatalf("want *ParseError, got %T: %v", err, err)
+	got, err := ParseFindings(raw)
+	if err != nil {
+		t.Fatalf("ParseFindings should strip ```json fence; got: %v", err)
 	}
-	if pe.Kind != "markdown_fence" {
-		t.Errorf("Kind: got %q, want markdown_fence", pe.Kind)
+	if len(got) != 0 {
+		t.Errorf("got %d findings, want 0 (empty envelope)", len(got))
+	}
+}
+
+// TestParseFindingsStripsBareFence verifies that a fence without a
+// language tag — ```\n...\n``` — is also stripped. Some models emit
+// this form when the prompt forbids any language tag.
+func TestParseFindingsStripsBareFence(t *testing.T) {
+	raw := []byte("```\n{\"findings\":[{\"file\":\"a.go\",\"line\":1,\"severity\":\"low\",\"title\":\"t\",\"evidence\":\"e\",\"suggested_comment\":\"c\",\"fix_hint\":\"f\",\"confidence\":0.5}]}\n```")
+	got, err := ParseFindings(raw)
+	if err != nil {
+		t.Fatalf("ParseFindings should strip bare ``` fence; got: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1", len(got))
+	}
+}
+
+// TestParseFindingsStripsFenceWithTrailingWhitespace covers the case
+// where the model adds whitespace after the closing fence.
+func TestParseFindingsStripsFenceWithTrailingWhitespace(t *testing.T) {
+	raw := []byte("```json\n{\"findings\":[]}\n```\n\n  ")
+	if _, err := ParseFindings(raw); err != nil {
+		t.Fatalf("ParseFindings should tolerate trailing whitespace after fence; got: %v", err)
 	}
 }
 
