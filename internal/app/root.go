@@ -117,7 +117,7 @@ func runPickerForModels(items []tui.ModelPickerItem, models map[string]model.Mod
 	}
 
 	picker := tui.NewModelPickerModel(items)
-	prog := tea.NewProgram(picker)
+	prog := tea.NewProgram(picker, tea.WithAltScreen())
 	if _, err := prog.Run(); err != nil {
 		return nil, fmt.Errorf("picker: %w", err)
 	}

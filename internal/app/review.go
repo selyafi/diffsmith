@@ -26,7 +26,7 @@ import (
 // ReviewModel via tui.LoaderModel.ReviewModel — see withFakeTUI in
 // review_test.go.
 var runTUI = func(loader *tui.LoaderModel, pipeline func(send func(tea.Msg))) error {
-	p := tea.NewProgram(loader)
+	p := tea.NewProgram(loader, tea.WithAltScreen())
 	go pipeline(func(msg tea.Msg) { p.Send(msg) })
 	_, err := p.Run()
 	return err
@@ -154,6 +154,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		}
 
 		final := surviving[0]
+		synthesisLeadName := "" // empty == no synthesis happened
 		if len(surviving) >= 2 {
 			// Spec §14 AC8: try synthesis on each surviving model in
 			// priority order. The first one that succeeds wins. If all
@@ -171,6 +172,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 				synth, err := leadModel.Synthesize(ctx, input, surviving)
 				if err == nil && synth != nil {
 					final = synth
+					synthesisLeadName = candidate.Model
 					break
 				}
 				if err != nil {
@@ -183,7 +185,8 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		idx := diff.NewIndex(input.Files)
 		valid, quarantined := review.Validate(final.Findings, final.Model, idx)
 
-		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined})
+		summary := buildRunSummary(selected.All, surviving, dropped, synthesisLeadName, len(final.Findings))
+		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined, RunSummary: summary})
 	}
 	if err := runTUI(loader, pipeline); err != nil {
 		return err
@@ -210,7 +213,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		}
 	}
 
-	writeFindings(cmd.OutOrStdout(), loader.GetApprovedFindings(), loader.Quarantined(), loader.TotalReviewed())
+	writeFindings(cmd.OutOrStdout(), loader.GetApprovedFindings(), loader.Quarantined(), loader.TotalReviewed(), loader.RunSummary())
 	return nil
 }
 
@@ -229,6 +232,43 @@ func confirmPost(cmd *cobra.Command, n, prNumber int) bool {
 		return false
 	}
 	return b == 'y' || b == 'Y'
+}
+
+// buildRunSummary formats a one-line audit of a multi-model run for
+// the post-quit terminal output. Examples:
+//
+//	"Models: codex (5 findings), claude (3 findings) → synthesized via codex into 2 findings."
+//	"Models: codex (5 findings) → 5 findings."           (single model)
+//	"Models: codex (5), claude (3); synthesis failed → using codex (5 findings)."
+//	"Models: codex (5 findings); claude failed: gh exec: exit 1"
+//
+// finalCount is the count of findings BEFORE the validator pass — the
+// validator's quarantine count is already surfaced separately.
+func buildRunSummary(selectedAll []model.Model, surviving []*review.ModelReviewResult, dropped []modelOutcome, synthesisLead string, finalCount int) string {
+	if len(selectedAll) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(surviving)+len(dropped))
+	// Surviving (priority order is preserved by splitOutcomes).
+	for _, r := range surviving {
+		parts = append(parts, fmt.Sprintf("%s (%d findings)", r.Model, len(r.Findings)))
+	}
+	for _, d := range dropped {
+		parts = append(parts, fmt.Sprintf("%s failed: %v", d.Name, d.Err))
+	}
+	prefix := "Models: " + strings.Join(parts, ", ")
+
+	switch {
+	case len(surviving) == 1:
+		return prefix + "."
+	case synthesisLead != "":
+		return fmt.Sprintf("%s → synthesized via %s into %d findings.", prefix, synthesisLead, finalCount)
+	case len(surviving) >= 2:
+		// Synthesis was attempted but all attempts failed; using surviving[0].
+		return fmt.Sprintf("%s; synthesis failed → using %s (%d findings).", prefix, surviving[0].Model, finalCount)
+	default:
+		return prefix + "."
+	}
 }
 
 // findModelByName looks up a Model in the slice by its Name() string.
@@ -263,7 +303,10 @@ func aggregateErrors(dropped []modelOutcome) error {
 // zero, the model genuinely returned nothing; when it's non-zero but
 // `valid` is empty, the user approved none — those two cases need
 // different copy so a reviewer can tell them apart (per diffsmith-14p).
-func writeFindings(w io.Writer, valid []review.Finding, quarantined []review.Quarantined, totalReviewed int) {
+func writeFindings(w io.Writer, valid []review.Finding, quarantined []review.Quarantined, totalReviewed int, runSummary string) {
+	if runSummary != "" {
+		fmt.Fprintln(w, runSummary)
+	}
 	if totalReviewed == 0 && len(quarantined) == 0 {
 		fmt.Fprintln(w, "No findings.")
 		return

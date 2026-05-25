@@ -227,7 +227,7 @@ func (m *Model) renderFooter() string {
 		return footerStyle.Render("Edit:  ctrl+s = save  |  esc = cancel  |  arrows = move cursor")
 	}
 	return footerStyle.Render(
-		"↑↓ navigate  |  e edit  |  a approve  |  d dismiss  |  c copy  |  p mark-post  |  q quit",
+		"↑↓ navigate  |  e edit  |  a approve  |  d dismiss  |  c copy  |  p mark-post  |  q back",
 	)
 }
 

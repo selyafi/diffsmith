@@ -86,7 +86,7 @@ func runInboxCommandWithSelected(cmd *cobra.Command, flags *reviewFlags, registr
 		if current == nil {
 			return nil, 0, fmt.Errorf("inbox: lister called before model initialized")
 		}
-		prog := tea.NewProgram(current)
+		prog := tea.NewProgram(current, tea.WithAltScreen())
 		if _, err := prog.Run(); err != nil {
 			return nil, 0, err
 		}
