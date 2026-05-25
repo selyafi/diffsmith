@@ -12,6 +12,7 @@ import (
 	"github.com/selyafi/diffsmith/internal/model/antigravitycli"
 	"github.com/selyafi/diffsmith/internal/model/claudecli"
 	"github.com/selyafi/diffsmith/internal/model/codexcli"
+	"github.com/selyafi/diffsmith/internal/model/geminicli"
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/provider/githubgh"
 	"github.com/selyafi/diffsmith/internal/provider/gitlabglab"
@@ -70,9 +71,9 @@ func newRootCmd() *cobra.Command {
 
 // preflightModels probes each adapter and returns a slice of picker
 // items annotated with availability. Order is stable: codex, claude,
-// antigravity.
+// gemini, antigravity.
 func preflightModels(ctx context.Context, models map[string]model.Model) []tui.ModelPickerItem {
-	order := []string{"codex", "claude", "antigravity"}
+	order := []string{"codex", "claude", "gemini", "antigravity"}
 	items := make([]tui.ModelPickerItem, 0, len(order))
 	for _, name := range order {
 		m, ok := models[name]
@@ -113,7 +114,7 @@ func runPickerForModels(items []tui.ModelPickerItem, models map[string]model.Mod
 		}
 	}
 	if available == 0 {
-		return nil, fmt.Errorf("no review CLIs available; install/auth at least one of: codex, claude, antigravity")
+		return nil, fmt.Errorf("no review CLIs available; install/auth at least one of: codex, claude, gemini, antigravity")
 	}
 
 	picker := tui.NewModelPickerModel(items)
@@ -144,15 +145,16 @@ func defaultRegistry() *provider.Registry {
 	return provider.NewRegistry(githubgh.New(nil), gitlabglab.New(nil))
 }
 
-// defaultModels returns the model registry wired to real CLIs. Codex
-// and Claude are required v1 adapters. Antigravity (agy) is registered
-// so `--model antigravity` surfaces the actionable Preflight error from
-// spike S8b instead of an "unknown model" CLI error; the adapter itself
-// refuses to run because agy has no non-interactive auth path in v1.
+// defaultModels returns the model registry wired to real CLIs. Codex,
+// Claude, and Gemini are the working v1 adapters. Antigravity (agy) is
+// still registered so a user who selects it sees the actionable
+// Preflight error from spike S8b (no non-interactive auth path) rather
+// than an "unknown model" CLI error; the adapter itself refuses to run.
 func defaultModels() map[string]model.Model {
 	return map[string]model.Model{
 		"codex":       codexcli.New(nil),
 		"claude":      claudecli.New(nil),
+		"gemini":      geminicli.New(nil),
 		"antigravity": antigravitycli.New(nil),
 	}
 }

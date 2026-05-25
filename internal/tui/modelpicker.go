@@ -27,17 +27,21 @@ type ModelPickerModel struct {
 }
 
 // priority reflects the synthesis lead priority: codex > claude >
-// antigravity. Used only for default checking and lead-name display.
+// gemini > antigravity. Used only for default checking and lead-name
+// display. Antigravity sits last because it's an experimental stub
+// (interactive OAuth, S8b) — Preflight will reject it, so it always
+// renders unavailable.
 var pickerPriority = map[string]int{
 	"codex":       0,
 	"claude":      1,
-	"antigravity": 2,
+	"gemini":      2,
+	"antigravity": 3,
 }
 
 // NewModelPickerModel constructs a picker with default checks applied:
-// codex and claude pre-checked if available; antigravity unchecked.
-// If codex is unavailable, the highest-priority available model is
-// pre-checked alone as a fallback.
+// codex, claude, and gemini pre-checked if available; antigravity
+// unchecked. If codex is unavailable, the highest-priority available
+// model is pre-checked alone as a fallback.
 func NewModelPickerModel(items []ModelPickerItem) *ModelPickerModel {
 	// Copy so default-check mutations don't leak into the caller's slice.
 	items = append([]ModelPickerItem(nil), items...)
@@ -48,6 +52,9 @@ func NewModelPickerModel(items []ModelPickerItem) *ModelPickerModel {
 			codexOK = true
 		}
 		if it.Name == "claude" && it.Available {
+			items[i].checked = true
+		}
+		if it.Name == "gemini" && it.Available {
 			items[i].checked = true
 		}
 	}
@@ -176,17 +183,17 @@ func (m *ModelPickerModel) IsChecked(name string) bool {
 }
 
 // SelectedNames returns the names of currently-checked items, in
-// priority order (codex > claude > antigravity > others).
+// priority order (codex > claude > gemini > antigravity > others).
 func (m *ModelPickerModel) SelectedNames() []string {
 	names := []string{}
-	for _, pname := range []string{"codex", "claude", "antigravity"} {
+	for _, pname := range []string{"codex", "claude", "gemini", "antigravity"} {
 		for _, it := range m.items {
 			if it.Name == pname && it.checked {
 				names = append(names, it.Name)
 			}
 		}
 	}
-	known := map[string]bool{"codex": true, "claude": true, "antigravity": true}
+	known := map[string]bool{"codex": true, "claude": true, "gemini": true, "antigravity": true}
 	for _, it := range m.items {
 		if it.checked && !known[it.Name] {
 			names = append(names, it.Name)

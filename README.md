@@ -29,10 +29,11 @@ Most AI review tools fail by posting noisy comments directly into pull requests.
 ```sh
 diffsmith review <github-pr-url|gitlab-mr-url> --model codex
 diffsmith review <github-pr-url|gitlab-mr-url> --model claude
+diffsmith review <github-pr-url|gitlab-mr-url> --model gemini
 diffsmith review <github-pr-url|gitlab-mr-url> --model antigravity   # experimental in v1
 ```
 
-V1 supports `codex` and `claude` as fully tested adapters. `antigravity` (CLI binary: `agy`) is experimental in v1 and is currently disabled: running `--model antigravity` returns a clear actionable error because the `agy` CLI has no non-interactive auth path. See `internal/model/antigravitycli/doc.go` for details.
+V1 supports `codex`, `claude`, and `gemini` as fully tested adapters. `antigravity` (CLI binary: `agy`) is experimental in v1 and is currently disabled: selecting it returns a clear actionable error because the `agy` CLI has no non-interactive auth path. See `internal/model/antigravitycli/doc.go` for details.
 
 ## V1 Dependencies
 
@@ -43,7 +44,7 @@ For repository access:
 
 For AI review:
 
-- `codex` or `claude` CLI, depending on `--model`
+- `codex`, `claude`, or `gemini` CLI — at least one must be installed; the picker shows which are available at startup.
 - (`agy` for Antigravity is not a supported install path in v1; the adapter ships disabled — see "Intended V1 Command" above)
 
 ## V1 Workflow

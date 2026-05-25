@@ -28,6 +28,42 @@ func TestPicker_DefaultSelectsCodexAndClaude(t *testing.T) {
 	}
 }
 
+func TestPicker_DefaultPreChecksGeminiWhenAvailable(t *testing.T) {
+	m := mkPicker([]ModelPickerItem{
+		{Name: "codex", Available: true},
+		{Name: "claude", Available: true},
+		{Name: "gemini", Available: true},
+		{Name: "antigravity", Available: false, Unavailable: "no non-interactive auth"},
+	})
+	if !m.IsChecked("gemini") {
+		t.Error("gemini should be checked by default when available")
+	}
+	if m.IsChecked("antigravity") {
+		t.Error("antigravity should NOT be checked even when gemini is available")
+	}
+	got := m.SelectedNames()
+	want := []string{"codex", "claude", "gemini"}
+	if len(got) != len(want) {
+		t.Fatalf("SelectedNames length = %d, want %d (got %v)", len(got), len(want), got)
+	}
+	for i, name := range want {
+		if got[i] != name {
+			t.Errorf("SelectedNames[%d] = %q, want %q (priority order: codex > claude > gemini)", i, got[i], name)
+		}
+	}
+}
+
+func TestPicker_GeminiUncheckedWhenUnavailable(t *testing.T) {
+	m := mkPicker([]ModelPickerItem{
+		{Name: "codex", Available: true},
+		{Name: "claude", Available: true},
+		{Name: "gemini", Available: false, Unavailable: "gemini CLI not on PATH"},
+	})
+	if m.IsChecked("gemini") {
+		t.Error("gemini unavailable should NOT be pre-checked")
+	}
+}
+
 func TestPicker_DefaultFallbackWhenCodexUnavailable(t *testing.T) {
 	m := mkPicker([]ModelPickerItem{
 		{Name: "codex", Available: false, Unavailable: "no binary"},

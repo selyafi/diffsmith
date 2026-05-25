@@ -1,0 +1,94 @@
+package geminicli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os/exec"
+	"strings"
+
+	"github.com/selyafi/diffsmith/internal/model"
+	"github.com/selyafi/diffsmith/internal/provider"
+	"github.com/selyafi/diffsmith/internal/review"
+)
+
+// DefaultInputBudgetBytes caps the prompt size sent to gemini. Matches
+// the claudecli budget (256 KB) since both adapters consume the same
+// model.BuildPrompt scaffold and the budget is calibrated per the spike
+// S9 measurements documented in claudecli/adapter.go.
+const DefaultInputBudgetBytes = 256 * 1024
+
+// Adapter implements the model.Model interface against the Gemini CLI.
+type Adapter struct {
+	run      provider.Runner
+	lookPath func(name string) (string, error)
+}
+
+// New constructs an Adapter. Passing nil uses provider.DefaultRunner;
+// lookPath defaults to exec.LookPath. Tests override fields directly
+// (the package is internal-only).
+func New(run provider.Runner) *Adapter {
+	if run == nil {
+		run = provider.DefaultRunner
+	}
+	return &Adapter{
+		run:      run,
+		lookPath: exec.LookPath,
+	}
+}
+
+// Name returns the model identifier surfaced to users via the picker
+// and attached to validated findings.
+func (a *Adapter) Name() string { return "gemini" }
+
+// Preflight verifies the gemini binary is on PATH. The model is never
+// invoked when this fails; the user sees an actionable install hint
+// instead of a stack trace from os/exec.
+func (a *Adapter) Preflight(_ context.Context) error {
+	if _, err := a.lookPath("gemini"); err != nil {
+		return errors.New("gemini CLI not found on PATH. Install: https://github.com/google-gemini/gemini-cli")
+	}
+	return nil
+}
+
+// Review invokes gemini with `-o text`. Stdin piping, JSON shape, and
+// validation are prompt-engineered (see prompt-contract.md): the model
+// is instructed to emit a {"findings":[...]} JSON object as its entire
+// response, so text mode returns exactly that.
+//
+// We deliberately do NOT use `-o json`, which wraps the model output in
+// a {"response": ..., "stats": ...} envelope. That envelope would have
+// to be unwrapped before parsing; text mode skips that step.
+func (a *Adapter) Review(ctx context.Context, input *review.ReviewInput) (*review.ModelReviewResult, error) {
+	return a.executeWithPrompt(ctx, model.BuildPrompt(input))
+}
+
+// Synthesize runs gemini against the synthesis prompt that combines
+// the diff with N other reviewers' findings.
+func (a *Adapter) Synthesize(ctx context.Context, input *review.ReviewInput, results []*review.ModelReviewResult) (*review.ModelReviewResult, error) {
+	return a.executeWithPrompt(ctx, model.BuildSynthesisPrompt(input, results))
+}
+
+// executeWithPrompt runs gemini against the given prompt and returns
+// the parsed result. Shared by Review (normal review prompt) and
+// Synthesize (synthesis prompt).
+func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review.ModelReviewResult, error) {
+	if len(prompt) > DefaultInputBudgetBytes {
+		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR or filter files",
+			len(prompt), DefaultInputBudgetBytes, a.Name())
+	}
+
+	out, err := a.run(ctx, strings.NewReader(prompt), "gemini", "-o", "text")
+	if err != nil {
+		return nil, fmt.Errorf("gemini: %w", err)
+	}
+	findings, err := model.ParseFindings(out)
+	if err != nil {
+		return nil, fmt.Errorf("gemini output: %w", err)
+	}
+	return &review.ModelReviewResult{
+		Model:     a.Name(),
+		Findings:  findings,
+		RawOutput: string(out),
+	}, nil
+}
