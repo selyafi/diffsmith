@@ -31,3 +31,8 @@ spikes/
 # Test artifacts
 coverage.out
 coverage.html
+
+# Generated at release time by .github/workflows/release.yml — extracts
+# the latest CHANGELOG section for the GitHub Release body. Goreleaser
+# refuses to release on a dirty working tree, so this must be ignored.
+/RELEASE_NOTES.md
