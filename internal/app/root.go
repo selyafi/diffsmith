@@ -17,6 +17,7 @@ import (
 	"github.com/selyafi/diffsmith/internal/provider/githubgh"
 	"github.com/selyafi/diffsmith/internal/provider/gitlabglab"
 	"github.com/selyafi/diffsmith/internal/tui"
+	"github.com/selyafi/diffsmith/internal/update"
 )
 
 // version is set via SetVersion from main at startup. The literal "dev"
@@ -62,6 +63,17 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			return runInboxCommandWithSelected(cmd, rootFlags, registry, selected)
+		},
+		// PersistentPostRun fires after every subcommand (review, inbox)
+		// AND after the bare-root RunE. update.Check is silent on any
+		// failure and bounded by a 3-second HTTP timeout, so it can
+		// never block or break the user-facing flow.
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			update.Check(ctx, version, cmd.ErrOrStderr())
 		},
 	}
 	root.Flags().BoolVar(&rootFlags.repost, "repost", false, "bypass dedup and post every approved finding even if a diffsmith thread already exists at the same file:line")
