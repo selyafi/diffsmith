@@ -84,8 +84,43 @@ func TestParseFindingsStripsFenceWithTrailingWhitespace(t *testing.T) {
 	}
 }
 
-func TestParseFindingsRejectsProsePreamble(t *testing.T) {
+// TestParseFindingsStripsProsePreamble verifies that prose before the
+// JSON envelope is stripped (covers claude's occasional "Here is my
+// analysis: {...}" drift).
+func TestParseFindingsStripsProsePreamble(t *testing.T) {
 	raw := []byte("Here is the JSON:\n{\"findings\":[]}")
+	got, err := ParseFindings(raw)
+	if err != nil {
+		t.Fatalf("ParseFindings should strip prose preamble; got: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d findings, want 0 (empty envelope)", len(got))
+	}
+}
+
+// TestParseFindingsStripsTrailingProse verifies that prose after the
+// JSON envelope (e.g. "Hope this helps!") is also stripped.
+func TestParseFindingsStripsTrailingProse(t *testing.T) {
+	raw := []byte("{\"findings\":[]}\n\nLet me know if you'd like more.")
+	if _, err := ParseFindings(raw); err != nil {
+		t.Fatalf("ParseFindings should strip trailing prose; got: %v", err)
+	}
+}
+
+// TestParseFindingsStripsCombinedFenceAndProse verifies that a model
+// can wrap the envelope in BOTH prose and a code fence and still parse.
+func TestParseFindingsStripsCombinedFenceAndProse(t *testing.T) {
+	raw := []byte("Sure! Here is the review:\n```json\n{\"findings\":[]}\n```\nLet me know.")
+	if _, err := ParseFindings(raw); err != nil {
+		t.Fatalf("ParseFindings should strip fence + prose combination; got: %v", err)
+	}
+}
+
+// TestParseFindingsRejectsOutputWithoutJSON verifies that prose_preamble
+// still fires for output that contains no JSON envelope at all (the
+// strip is bounded — it can only peel JSON when JSON is present).
+func TestParseFindingsRejectsOutputWithoutJSON(t *testing.T) {
+	raw := []byte("I refuse to review this code.")
 	_, err := ParseFindings(raw)
 	var pe *ParseError
 	if !errors.As(err, &pe) {

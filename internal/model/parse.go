@@ -29,14 +29,16 @@ func (e *ParseError) Unwrap() error { return e.Cause }
 // ParseFindings turns raw model stdout into review.FindingCandidate values.
 //
 // The contract from docs/prompt-contract.md is strict JSON, but reality
-// is that some CLIs (notably gemini) wrap their output in markdown code
-// fences despite the prompt forbidding them. Rather than rejecting
-// fenced output and failing the whole review, stripMarkdownFences
-// peels the wrapper before parsing. Any other deviation (prose
-// preamble, malformed JSON, missing findings key) still returns a
-// categorized *ParseError so callers can surface a useful message.
+// is that models occasionally wrap the envelope in markdown code fences
+// (gemini) or chatty prose (claude's "Here is the review: ..."). Rather
+// than rejecting these and failing the whole review, stripWrapper peels
+// any outer wrapper before parsing — it slices to the outermost JSON
+// object delimited by the first `{` and the last `}`. Any other
+// deviation (no JSON at all, malformed JSON, missing findings key)
+// still returns a categorized *ParseError so callers can surface a
+// useful message.
 func ParseFindings(raw []byte) ([]review.FindingCandidate, error) {
-	trimmed := stripMarkdownFences(string(raw))
+	trimmed := stripWrapper(string(raw))
 
 	if !strings.HasPrefix(trimmed, "{") {
 		return nil, &ParseError{Kind: "prose_preamble", Raw: truncate(trimmed, 200)}
@@ -74,26 +76,32 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// stripMarkdownFences removes a leading ```lang\n (or ```\n) and a
-// trailing \n``` from s, if both are present. Returns the input
-// whitespace-trimmed when no fences are detected, so well-behaved
-// outputs pass through unchanged. Only the outermost fence pair is
-// stripped — nested fences inside the JSON body are preserved.
-func stripMarkdownFences(s string) string {
+// stripWrapper peels any outer wrapper from s and returns the inner
+// JSON-looking slice. It handles three common forms of model drift:
+//
+//   - markdown fences:  ```json\n{...}\n```
+//   - prose preamble:   Here is the review: {...}
+//   - trailing prose:   {...}\n\nHope this helps!
+//   - combinations:     Sure! ```json\n{...}\n``` Let me know.
+//
+// The strategy is intentionally aggressive: find the outermost {...}
+// span by locating the first '{' and the last '}', then slice between
+// them (inclusive). Well-behaved outputs that are already a clean JSON
+// object pass through unchanged. Outputs with no '{' at all (e.g.
+// model refused to respond) return whitespace-trimmed input so the
+// caller's existing prose_preamble error still fires.
+//
+// Tradeoff: a malformed JSON body that contains stray '}' characters
+// after the true closing brace will be sliced wrong, producing an
+// invalid_json error instead of a more precise one. That's acceptable
+// — the result is still a categorized failure with a truncated raw
+// payload for debugging.
+func stripWrapper(s string) string {
 	s = strings.TrimSpace(s)
-	if !strings.HasPrefix(s, "```") {
+	first := strings.IndexByte(s, '{')
+	last := strings.LastIndexByte(s, '}')
+	if first < 0 || last <= first {
 		return s
 	}
-	// Drop the opening fence line up to and including the first
-	// newline. This handles both ```json\n and ```\n forms.
-	if newline := strings.IndexByte(s, '\n'); newline >= 0 {
-		s = s[newline+1:]
-	} else {
-		// Single-line fenced output (no newline) — just drop the
-		// opening backticks and let later parsing decide.
-		s = strings.TrimPrefix(s, "```")
-	}
-	s = strings.TrimRightFunc(s, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' })
-	s = strings.TrimSuffix(s, "```")
-	return strings.TrimSpace(s)
+	return s[first : last+1]
 }

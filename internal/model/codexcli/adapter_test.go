@@ -157,13 +157,19 @@ type mockExitError struct{ msg string }
 
 func (e *mockExitError) Error() string { return e.msg }
 
+// TestReviewSurfacesParseError verifies that genuinely unparseable
+// model output (no JSON envelope) surfaces a parse error wrapped with
+// "codex output" context. The defensive parser strips prose preambles
+// and fences before parsing (see internal/model/parse.go stripWrapper),
+// so this test uses input with no JSON-like braces at all to force the
+// underlying *ParseError to fire.
 func TestReviewSurfacesParseError(t *testing.T) {
-	run, _ := scriptedRunner(t, [][]byte{[]byte("Here is your JSON: {\"findings\":[]}")})
+	run, _ := scriptedRunner(t, [][]byte{[]byte("I refuse to review this code.")})
 	a := New(run)
 
 	_, err := a.Review(context.Background(), sampleInput())
 	if err == nil {
-		t.Fatal("want parse error from prose preamble, got nil")
+		t.Fatal("want parse error from output containing no JSON, got nil")
 	}
 	if !strings.Contains(err.Error(), "codex output") {
 		t.Errorf("parse error should be wrapped with `codex output` context; got: %v", err)
