@@ -64,10 +64,9 @@ func newInboxCmd(registry *provider.Registry, models map[string]model.Model) *co
 // subcommand and bare `diffsmith` (no subcommand). Both paths run the
 // picker upstream and pass the resolved SelectedModels here.
 func runInboxCommandWithSelected(cmd *cobra.Command, flags *reviewFlags, registry *provider.Registry, selected *model.SelectedModels) error {
-	ctx := cmd.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	// ctx is not used in this function — repodetect/registry calls don't take
+	// one, and the opener closure below has its own ctx parameter. The
+	// runInbox helper resolves cmd.Context() itself where needed.
 	repo, err := repodetect.Detect()
 	if err != nil {
 		return err

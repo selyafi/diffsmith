@@ -1,0 +1,26 @@
+# golangci-lint v2 config.
+#
+# Diffsmith's CLI/UI layers write to io.Writer (typically os.Stdout or
+# os.Stderr) in many places. Wrapping every fmt.Fprintf with
+# `_, _ = fmt.Fprintf(...)` adds noise without value — there's nothing
+# meaningful to do if writing to stderr fails (the error path itself
+# would write to the same broken sink). Exclude those calls from
+# errcheck so the lint signal stays focused on errors that actually
+# matter (file I/O, network, JSON, etc.).
+#
+# This config is loaded by `golangci-lint run`. The action bump in
+# .github/workflows/ci.yml (v6 -> v7) is needed for the v2 schema.
+version: "2"
+
+linters:
+  default: standard
+
+  settings:
+    errcheck:
+      # Stdout/stderr-shaped writes are practically unfailable in our
+      # usage. Listed by package path so a stray io.Writer alias or
+      # buffered writer that *does* matter still gets checked.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
