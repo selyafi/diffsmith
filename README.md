@@ -35,6 +35,51 @@ diffsmith review <github-pr-url|gitlab-mr-url> --model antigravity   # experimen
 
 V1 supports `codex`, `claude`, and `gemini` as fully tested adapters. `antigravity` (CLI binary: `agy`) is experimental in v1 and is currently disabled: selecting it returns a clear actionable error because the `agy` CLI has no non-interactive auth path. See `internal/model/antigravitycli/doc.go` for details.
 
+## Install
+
+### One-line install (macOS and Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/selyafi/diffsmith/main/install.sh | sh
+```
+
+The script detects your OS and architecture, downloads the matching tarball from the latest GitHub Release, verifies its SHA256 against the published `SHA256SUMS`, and installs the binary to `/usr/local/bin` (or `$HOME/.local/bin` if `/usr/local/bin` is not writable without sudo).
+
+To pin a specific version or change the install directory:
+
+```bash
+DIFFSMITH_VERSION=v0.1.0 INSTALL_DIR="$HOME/bin" \
+  curl -fsSL https://raw.githubusercontent.com/selyafi/diffsmith/main/install.sh | sh
+```
+
+### Via `go install`
+
+If you have Go 1.22+ installed:
+
+```bash
+go install github.com/selyafi/diffsmith/cmd/diffsmith@latest
+```
+
+### Manual download
+
+Grab the tarball for your platform from the [latest release](https://github.com/selyafi/diffsmith/releases/latest), extract it, and move the `diffsmith` binary somewhere on your `PATH`.
+
+### Updating
+
+Re-run the install command — `install.sh` always resolves to the most recent release, so running it again upgrades in place. For `go install`, repeat the `@latest` invocation.
+
+### Verifying
+
+```bash
+diffsmith --version
+```
+
+### Uninstalling
+
+```bash
+rm "$(command -v diffsmith)"
+```
+
 ## V1 Dependencies
 
 For repository access:
