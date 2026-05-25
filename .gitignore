@@ -21,6 +21,13 @@
 # Agent/tooling guidance for this machine only (bd workflow)
 AGENTS.md
 
+# Workflow artifacts — local-only by convention (same pattern as docs/)
+plans/
+spikes/
+
+# Serena MCP server project config — tool-local, not project state
+.serena/
+
 # Test artifacts
 coverage.out
 coverage.html
