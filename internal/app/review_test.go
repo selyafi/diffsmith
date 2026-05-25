@@ -430,7 +430,7 @@ func withFakeSubmit(t *testing.T) (calls *int, captured *[]review.Finding) {
 	c := 0
 	var f []review.Finding
 	prev := submitPost
-	submitPost = func(_ context.Context, _ io.Writer, _ review.ReviewTarget, marked []review.Finding) error {
+	submitPost = func(_ context.Context, _ io.Writer, _ review.ReviewTarget, marked []review.Finding, _ bool) error {
 		c++
 		f = append([]review.Finding(nil), marked...)
 		return nil

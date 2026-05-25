@@ -64,6 +64,7 @@ func newRootCmd() *cobra.Command {
 			return runInboxCommandWithSelected(cmd, rootFlags, registry, selected)
 		},
 	}
+	root.Flags().BoolVar(&rootFlags.repost, "repost", false, "bypass dedup and post every approved finding even if a diffsmith thread already exists at the same file:line")
 	root.AddCommand(newReviewCmd(registry, models))
 	root.AddCommand(newInboxCmd(registry, models))
 	return root

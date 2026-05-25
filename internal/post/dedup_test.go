@@ -1,13 +1,13 @@
 package post
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 
-	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/review"
 )
 
@@ -156,8 +156,66 @@ func TestFetchExistingGitHubKeys_FiltersBySignature(t *testing.T) {
 	}
 }
 
-// scriptedRunnerForRunner returns a typed provider.Runner that drives
-// the same call recorder used elsewhere in the package, so dedup tests
-// can compose with the existing scriptedGlab/scriptedGH helpers when
-// integration tests are added below.
-var _ provider.Runner = func(context.Context, io.Reader, string, ...string) ([]byte, error) { return nil, nil }
+// TestPoster_Submit_GitLabDedupSkipsExistingThreads is the end-to-end
+// proof that the dedup wire-up is correct: when an existing diffsmith
+// thread is present at a.go:1, a new finding at a.go:1 must NOT
+// produce a POST, and the user must see the "Skipping N finding(s)…"
+// summary. The new finding at b.go:2 still posts.
+func TestPoster_Submit_GitLabDedupSkipsExistingThreads(t *testing.T) {
+	// First glab call: dedup fetch returns one existing thread at a.go:1.
+	// Second call: inline POST for the surviving b.go:2 finding.
+	calls := scriptedGlab(t, []ghResult{
+		{out: []byte(`[{"notes":[{"body":"**diffsmith review** — high","position":{"new_path":"a.go","new_line":1}}]}]`)},
+		{out: []byte(`{"id":"def"}`)},
+	})
+
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf} // Repost=false: dedup must run
+	target := review.ReviewTarget{
+		Host:     review.HostGitLab,
+		Owner:    "g",
+		Repo:     "p",
+		Number:   1,
+		HeadSHA:  "h",
+		BaseSHA:  "b",
+		StartSHA: "s",
+	}
+	findings := []review.Finding{
+		{File: "a.go", Line: 1, SuggestedComment: "dupe"},
+		{File: "b.go", Line: 2, SuggestedComment: "new"},
+	}
+
+	if err := p.Submit(context.Background(), target, findings); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 glab calls (dedup-fetch + 1 inline POST); got %d", len(*calls))
+	}
+	// First call is the dedup-fetch.
+	if (*calls)[0].args[1] != "projects/g%2Fp/merge_requests/1/discussions" {
+		t.Errorf("first call should be the dedup fetch; got args[1] = %q", (*calls)[0].args[1])
+	}
+	if !contains((*calls)[0].args, "--paginate") {
+		t.Error("dedup fetch must use --paginate to cover all discussion pages")
+	}
+	// Second call is the inline POST for the b.go:2 finding (not a.go:1).
+	second := (*calls)[1]
+	if !contains(second.args, "--method") || !contains(second.args, "POST") {
+		t.Errorf("second call should be a POST; got %v", second.args)
+	}
+	if !strings.Contains(second.stdin, `"new_path":"b.go"`) || !strings.Contains(second.stdin, `"new_line":2`) {
+		t.Errorf("POST should be for b.go:2, not a.go:1; stdin: %s", second.stdin)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Skipping 1 finding(s) already posted") {
+		t.Errorf("expected dedup summary; got: %s", out)
+	}
+	if !strings.Contains(out, "a.go:1") {
+		t.Errorf("dedup summary should name the skipped finding; got: %s", out)
+	}
+	if !strings.Contains(out, "Posted 1 inline thread(s)") {
+		t.Errorf("expected truthful posted-count line; got: %s", out)
+	}
+}
