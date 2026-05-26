@@ -22,6 +22,20 @@ Semantic Versioning per the same doc.
   them, the lead model re-emitted findings that re-introduced the
   evidence/comment/fix_hint split that single-model runs no longer
   suffer from. (`diffsmith-cc2`)
+- Tightened review-prompt wording in six places to remove ambiguity and
+  reduce reviewer merge tax: the word "evidence" no longer carries two
+  senses (epistemic threshold vs JSON field name); synthesis step 4
+  no longer says "evidence-grounded" (which collided with the new field
+  semantics); the synthesis security rule now names the actual reviewer
+  JSON fields (`title`, `suggested_comment`, `evidence`, `fix_hint`,
+  `file`) instead of plural approximations; the synthesis prompt now
+  forbids verbatim rationale duplication across `suggested_comment` and
+  `evidence`; tells the lead to re-emit reviewer findings into the new
+  shape rather than drop them as false positives solely because the
+  input shape predates these rules; and restates the untrusted-input
+  warning immediately before the final "Emit the unified findings JSON
+  now" line so the rule is not buried thousands of tokens above the
+  emission instruction. (`diffsmith-uea`)
 
 ### Security
 
@@ -34,6 +48,15 @@ Semantic Versioning per the same doc.
   against a theoretical attack — no known exploit — closing the gap
   between BuildSynthesisPrompt and BuildPrompt, which already has the
   equivalent rule for diff content. (`diffsmith-f5l`)
+- PR/MR title, author, and branch are now explicitly marked as
+  untrusted input in both BuildPrompt and BuildSynthesisPrompt. The
+  previous untrusted-input rules covered only diff content and reviewer
+  outputs; PR metadata is written raw via `fmt.Fprintf(..., "%s", ...)`
+  and is attacker-controlled on fork PRs and external contributions
+  (titles, author display names, branch names can contain newlines and
+  forged section headers). Ordering tests pin that the new rule appears
+  before the rendered Target/PR TITLE/PR AUTHOR blocks in both prompts.
+  (`diffsmith-321`)
 
 ## v0.1.4 — 2026-05-26
 
