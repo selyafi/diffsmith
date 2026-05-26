@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # Manual escape hatch for the case where GitHub drops the tag-push
+  # webhook (Actions outages, transient delivery failures, dedup of a
+  # quick delete-and-re-push). Trigger from the Actions tab; pick the
+  # tag to release in the "Use workflow from" dropdown so checkout
+  # lands on that tag and goreleaser sees a clean release ref.
+  workflow_dispatch:
 
 permissions:
   contents: write
