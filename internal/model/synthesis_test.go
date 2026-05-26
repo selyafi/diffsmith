@@ -33,6 +33,18 @@ func TestBuildSynthesisPrompt_IncludesAllReviewerNames(t *testing.T) {
 	if !strings.Contains(got, input.RawDiff) {
 		t.Error("prompt should include the diff for grounding verification")
 	}
+	// Field-relationship rules — same wording as the single-model
+	// prompt (see prompt.go reviewRules). Synthesis emits the same
+	// schema, so it inherits the same merge-tax problem.
+	if !strings.Contains(got, "suggested_comment must be self-sufficient") {
+		t.Error("prompt should require self-sufficient suggested_comment")
+	}
+	if !strings.Contains(got, "Put the key rationale inside suggested_comment") {
+		t.Error("prompt should put rationale in suggested_comment, not evidence")
+	}
+	if !strings.Contains(got, "Reference the specific code element") {
+		t.Error("prompt should require referencing specific code elements")
+	}
 }
 
 func TestBuildSynthesisPrompt_HandlesEmptyResults(t *testing.T) {

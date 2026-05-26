@@ -23,6 +23,10 @@ func BuildSynthesisPrompt(input *review.ReviewInput, results []*review.ModelRevi
 	b.WriteString("2. Drop findings that look like false positives, hallucinations, or suggestions that don't ground to the diff.\n")
 	b.WriteString("3. Merge complementary findings (e.g., one says 'X is broken', another adds the fix 'do Y' → combine).\n")
 	b.WriteString("4. Re-emit the surviving findings in your own voice: short, direct, evidence-grounded suggested comments.\n\n")
+	b.WriteString("When you re-emit findings, follow these field-relationship rules:\n")
+	b.WriteString("- The suggested_comment must be self-sufficient: a reviewer reading only that field should understand the issue and the direction of the fix.\n")
+	b.WriteString("- Put the key rationale inside suggested_comment; use evidence for deeper supporting detail, not for prose the reviewer must merge in.\n")
+	b.WriteString("- Reference the specific code element (function, variable, condition, branch) by name in suggested_comment, not generic phrasing like 'this block' or 'the function above'.\n\n")
 	b.WriteString("Output format: the same JSON schema as a normal review. An object with a \"findings\" array of {file, line, severity, title, evidence, suggested_comment, fix_hint, confidence} entries.\n\n")
 
 	if input.Title != "" {

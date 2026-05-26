@@ -17,6 +17,11 @@ Semantic Versioning per the same doc.
   `suggested_comment` / `fix_hint` back into one prose blob by hand.
   The schema and product boundary from ADR 0005 are unchanged.
   (`diffsmith-flk`)
+- Synthesis prompt (multi-model dedup pass) now carries the same three
+  field-relationship rules as the single-model review prompt. Without
+  them, the lead model re-emitted findings that re-introduced the
+  evidence/comment/fix_hint split that single-model runs no longer
+  suffer from. (`diffsmith-cc2`)
 
 ## v0.1.4 — 2026-05-26
 
