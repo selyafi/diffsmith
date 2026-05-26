@@ -81,6 +81,14 @@ func BuildPrompt(input *review.ReviewInput) string {
 // reviewRules is the rule list from docs/prompt-contract.md. Keep this in
 // sync with that doc if it changes; the rules are the part of the prompt
 // most likely to be tweaked across versions.
+//
+// Ordering invariant: field-relationship rules (self-sufficient
+// suggested_comment, rationale-in-comment, code-element references,
+// no rationale duplication) must appear BEFORE the security rules
+// (untrusted-input, PR-metadata-untrusted, ignore-embedded). Security
+// rules are deliberately last so they sit immediately before the
+// untrusted diff body the model is about to read. Pinned by
+// TestBuildPromptOrdersFieldRelRulesBeforeSecurityRules.
 var reviewRules = []string{
 	"Review only the provided diff.",
 	"Report only issues grounded in changed code.",

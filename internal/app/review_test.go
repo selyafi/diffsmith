@@ -246,6 +246,56 @@ func TestReviewPrintPromptHappyPath(t *testing.T) {
 	}
 }
 
+func TestReviewPrintSynthesisPromptHappyPath(t *testing.T) {
+	// F7 (diffsmith-i8k): operators debugging synthesis-time behavior
+	// (merge tax, format compliance, injection compliance) need to see
+	// what the lead model actually receives. --print-synthesis-prompt
+	// is the synthesis analogue of --print-prompt: it short-circuits
+	// before any model is invoked, fetches the diff, and writes
+	// BuildSynthesisPrompt to stdout using stub reviewer outputs so
+	// the prompt structure (rules, ordering, sentinels) is visible
+	// without spending model quota.
+	stub := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: sampleReviewInput(),
+	}
+	root, out := newTestRoot(stub)
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--print-synthesis-prompt"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !stub.preflightHit {
+		t.Error("Preflight was not called before Fetch")
+	}
+	if !stub.fetchHit {
+		t.Error("Fetch was not called")
+	}
+
+	got := out.String()
+	for _, want := range []string{
+		// Synthesis prompt preamble
+		"synthesizing findings from multiple AI reviewers",
+		// Field-relationship rules block
+		"When you re-emit findings, follow these field-relationship rules",
+		// Security rules block + the nonce fence explanation
+		"Security rules",
+		"BEGIN_REVIEWER_OUTPUT_",
+		// Section markers must render
+		"== DIFF ==",
+		"== REVIEWER OUTPUTS ==",
+		// Trailing reminder must appear
+		"Final reminder:",
+		// Stub reviewer outputs render with the expected fixture text
+		"<reviewer A>",
+		"<reviewer B>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q.\nFull output:\n%s", want, got)
+		}
+	}
+}
+
 func TestReviewDryRunSkipsModel(t *testing.T) {
 	stub := &stubProvider{
 		supports:   func(string) bool { return true },

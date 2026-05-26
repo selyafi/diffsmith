@@ -56,3 +56,65 @@ func TestFormatBody_ComposesAllFindingFields(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatGitLabNote_OmitsEmptyOptionalSections(t *testing.T) {
+	// Mirrors TestFormatBody_OmitsEmptyOptionalSections for the GitLab
+	// path: Evidence and FixHint sections must NOT appear when those
+	// fields are empty. SuggestedComment must still appear.
+	f := review.Finding{
+		Severity:         review.SeverityLow,
+		Model:            "codex",
+		Confidence:       0.5,
+		SuggestedComment: "Consider renaming `tmp` to something self-describing.",
+	}
+
+	got := formatGitLabNote(f)
+
+	if strings.Contains(got, "Evidence:") {
+		t.Errorf("formatGitLabNote emitted Evidence section with no evidence\nGOT:\n%s", got)
+	}
+	if strings.Contains(got, "Fix hint:") {
+		t.Errorf("formatGitLabNote emitted Fix hint section with no fix hint\nGOT:\n%s", got)
+	}
+	if !strings.Contains(got, "Consider renaming") {
+		t.Errorf("formatGitLabNote dropped suggested comment\nGOT:\n%s", got)
+	}
+}
+
+func TestFormatGitLabNote_ComposesAllFindingFields(t *testing.T) {
+	// F4: parity with formatBody — when Evidence is provided by the
+	// model, it must appear in the GitLab note body. Previously
+	// formatGitLabNote dropped Evidence entirely, so reviewers on
+	// GitLab MRs lost the supporting context that the same review on
+	// a GitHub PR would have shown.
+	f := review.Finding{
+		File:             "internal/store/buffer.go",
+		Line:             42,
+		Severity:         review.SeverityMedium,
+		Model:            "claude",
+		Confidence:       0.8,
+		Title:            "Unbounded slice growth in append loop",
+		Evidence:         "for _, x := range items { buf = append(buf, x...) }",
+		SuggestedComment: "Pre-allocate buf with capacity equal to the expected total to avoid quadratic copy cost.",
+		FixHint:          "buf := make([]byte, 0, expectedSize)",
+	}
+
+	got := formatGitLabNote(f)
+
+	wantSubstrings := []string{
+		"medium",
+		"claude",
+		"Pre-allocate buf",
+		// Evidence section + content must both render.
+		"Evidence:",
+		"for _, x := range items",
+		// Fix hint must still render with its existing prefix style.
+		"Fix hint:",
+		"make([]byte, 0, expectedSize)",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatGitLabNote output missing %q\nGOT:\n%s", want, got)
+		}
+	}
+}

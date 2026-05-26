@@ -433,12 +433,20 @@ func (p *Poster) applyDedup(
 // formatGitLabNote renders a finding into a GitLab Markdown body.
 // The inline thread is already anchored at file:line via the position
 // fields, so the body leads with severity/model/confidence metadata,
-// then the suggested comment, then the fix hint.
+// then the suggested comment, then evidence (when present, as a
+// fenced code block matching formatBody), then the fix hint.
+//
+// Evidence is included to match the GitHub formatter (formatBody);
+// dropping it on GitLab caused asymmetric loss of supporting context
+// for the same finding posted across providers.
 func formatGitLabNote(f review.Finding) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**diffsmith review** — %s, model: %s, confidence: %.0f%%\n\n",
 		f.Severity, f.Model, f.Confidence*100)
 	b.WriteString(f.SuggestedComment)
+	if f.Evidence != "" {
+		fmt.Fprintf(&b, "\n\nEvidence:\n```\n%s\n```", f.Evidence)
+	}
 	if f.FixHint != "" {
 		fmt.Fprintf(&b, "\n\n*Fix hint:* %s", f.FixHint)
 	}

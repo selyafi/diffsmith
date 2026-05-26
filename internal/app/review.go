@@ -42,7 +42,14 @@ var submitPost = func(ctx context.Context, out io.Writer, target review.ReviewTa
 type reviewFlags struct {
 	dryRun       bool
 	printPrompt  bool
-	printPayload bool
+	// printSynthesisPrompt prints the multi-model synthesis prompt
+	// (BuildSynthesisPrompt) using stub reviewer outputs, so operators
+	// can inspect the lead model's input — rules, ordering, sentinels,
+	// security warnings — without spending model quota. Disjoint from
+	// printPrompt: both can be set; both prompts are then emitted with
+	// a separator between them.
+	printSynthesisPrompt bool
+	printPayload         bool
 	// repost bypasses the dedup-before-post step so every approved
 	// finding is sent to the host API even if a diffsmith thread
 	// already exists at the same (file, line). Default false:
@@ -65,10 +72,10 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			// --print-prompt and --dry-run bypass the model entirely;
-			// runReviewByURL short-circuits before any model is invoked, so
-			// nil SelectedModels is safe here.
-			if flags.printPrompt || flags.dryRun {
+			// --print-prompt, --print-synthesis-prompt, and --dry-run
+			// all bypass the model entirely; runReviewByURL short-circuits
+			// before any model is invoked, so nil SelectedModels is safe.
+			if flags.printPrompt || flags.printSynthesisPrompt || flags.dryRun {
 				return runReview(cmd, args, flags, nil, registry)
 			}
 
@@ -82,7 +89,8 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 	}
 
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "fetch and normalize the diff, then stop before the model call")
-	cmd.Flags().BoolVar(&flags.printPrompt, "print-prompt", false, "print the model prompt and exit without invoking the model")
+	cmd.Flags().BoolVar(&flags.printPrompt, "print-prompt", false, "print the single-model review prompt and exit without invoking the model")
+	cmd.Flags().BoolVar(&flags.printSynthesisPrompt, "print-synthesis-prompt", false, "print the multi-model synthesis prompt (using stub reviewer outputs) and exit without invoking the model")
 	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print the GraphQL payload(s) for findings marked with 'p' in the TUI, instead of posting upstream")
 	cmd.Flags().BoolVar(&flags.repost, "repost", false, "bypass dedup and post every approved finding even if a diffsmith thread already exists at the same file:line")
 
@@ -110,16 +118,42 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		return err
 	}
 
-	// --print-prompt and --dry-run bypass the TUI entirely: they need
-	// the fetched diff synchronously and print to stdout. No spinner.
-	if flags.printPrompt || flags.dryRun {
+	// --print-prompt, --print-synthesis-prompt, and --dry-run bypass
+	// the TUI entirely: they need the fetched diff synchronously and
+	// print to stdout. No spinner.
+	if flags.printPrompt || flags.printSynthesisPrompt || flags.dryRun {
 		input, err := p.Fetch(ctx, url)
 		if err != nil {
 			return err
 		}
 		if flags.printPrompt {
-			_, err := io.WriteString(cmd.OutOrStdout(), model.BuildPrompt(input))
-			return err
+			if _, err := io.WriteString(cmd.OutOrStdout(), model.BuildPrompt(input)); err != nil {
+				return err
+			}
+		}
+		if flags.printSynthesisPrompt {
+			if flags.printPrompt {
+				// Separator when both prompts are emitted in one run.
+				if _, err := io.WriteString(cmd.OutOrStdout(), "\n--- synthesis prompt ---\n\n"); err != nil {
+					return err
+				}
+			}
+			// Stub reviewer outputs make the synthesis prompt's
+			// structure visible (rules, sentinels, section markers)
+			// without spending model quota. The placeholder text is
+			// deliberately not valid JSON so an operator pasting the
+			// printed prompt into a model cannot mistake it for a
+			// real reviewer result.
+			stubResults := []*review.ModelReviewResult{
+				{Model: "<reviewer A>", RawOutput: "<reviewer A's JSON findings would appear here, between the BEGIN/END nonce markers>"},
+				{Model: "<reviewer B>", RawOutput: "<reviewer B's JSON findings would appear here, between the BEGIN/END nonce markers>"},
+			}
+			if _, err := io.WriteString(cmd.OutOrStdout(), model.BuildSynthesisPrompt(input, stubResults)); err != nil {
+				return err
+			}
+		}
+		if flags.printPrompt || flags.printSynthesisPrompt {
+			return nil
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "fetched %d file(s) from %s (model call skipped: --dry-run)\n", len(input.Files), input.Target.URL)
 		return nil

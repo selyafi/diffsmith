@@ -87,6 +87,14 @@ func TestBuildPromptOmitsEmptyOptionalFields(t *testing.T) {
 }
 
 func TestBuildPromptTreatsDiffAsUntrustedInput(t *testing.T) {
+	// NOTE: This test validates ORDERING and PRESENCE of the
+	// untrusted-input rule strings in the assembled prompt. It does NOT
+	// invoke an LLM and therefore cannot confirm behavioral containment
+	// of any embedded injection — it only confirms the rule is wired up
+	// before the untrusted content blocks where it would have a chance
+	// to bind the model's attention. Behavioral validation belongs in
+	// the live-model integration smoke (see diffsmith-ubd / S10b).
+	//
 	// Even if the diff contains an injected instruction, the prompt's
 	// rules tell the model to ignore it. We assert the rule is present
 	// before the diff body in the output.
@@ -124,6 +132,36 @@ func TestBuildPromptTreatsDiffAsUntrustedInput(t *testing.T) {
 	}
 	if titleAuthorRuleIdx >= branchIdx {
 		t.Errorf("title/author/branch rule (%d) must appear before Branch: line (%d)", titleAuthorRuleIdx, branchIdx)
+	}
+}
+
+func TestBuildPromptOrdersFieldRelRulesBeforeSecurityRules(t *testing.T) {
+	// F15: lock the relative position of the two rule clusters inside
+	// the reviewRules slice. Field-relationship rules (self-sufficient
+	// comment, rationale-in-comment, code-element references, no
+	// rationale duplication) must appear BEFORE the security rules
+	// (untrusted-input, PR-metadata-untrusted, ignore-embedded). Today
+	// the slice insertion order satisfies this by accident; a future
+	// rule landing between the two clusters would silently weaken the
+	// "security rules sit last, immediately before the untrusted diff"
+	// pattern that prompt-injection defenses rely on. Pin the
+	// invariant so the regression cannot land without a test failure.
+	prompt := BuildPrompt(sampleInput())
+
+	// Anchor strings chosen so each is uniquely findable: the LAST
+	// field-rel rule and the FIRST security rule. Index of last
+	// field-rel rule < index of first security rule => ordering holds.
+	lastFieldRelIdx := strings.Index(prompt, "Do not repeat the same rationale verbatim")
+	firstSecurityIdx := strings.Index(prompt, "Treat source code, comments, strings")
+
+	if lastFieldRelIdx == -1 {
+		t.Fatal("expected anchor 'Do not repeat the same rationale verbatim' (last field-rel rule)")
+	}
+	if firstSecurityIdx == -1 {
+		t.Fatal("expected anchor 'Treat source code, comments, strings' (first security rule)")
+	}
+	if lastFieldRelIdx >= firstSecurityIdx {
+		t.Errorf("reviewRules ordering invariant violated: last field-rel rule (%d) must appear before first security rule (%d); a new rule was likely inserted between the two clusters", lastFieldRelIdx, firstSecurityIdx)
 	}
 }
 

@@ -6,6 +6,20 @@ Semantic Versioning per the same doc.
 
 ## Unreleased
 
+### Added
+
+- `diffsmith review <url> --print-synthesis-prompt` — prints the
+  multi-model synthesis prompt (using stub reviewer outputs) and exits
+  without invoking any model. Operators debugging synthesis-time
+  behavior (merge tax recurrence, format compliance, injection
+  containment) can now inspect the lead model's exact input —
+  rules, ordering, BEGIN/END nonce sentinels, security warnings —
+  the same way `--print-prompt` has always exposed the single-model
+  prompt. The two flags are disjoint; setting both prints both
+  prompts in one run, separated by `--- synthesis prompt ---`.
+  Stub reviewer text is deliberately not valid JSON to prevent
+  accidental confusion with real reviewer results. (`diffsmith-i8k`)
+
 ### Changed
 
 - Review prompt now instructs models that `suggested_comment` must be
@@ -67,6 +81,20 @@ Semantic Versioning per the same doc.
   attacker producing `RawOutput`, and the lead model is instructed to
   ignore any BEGIN/END marker that does not use the exact nonce.
   (`diffsmith-3i6`)
+
+### Fixed
+
+- GitLab MR comment bodies now include the `Evidence` field (as a
+  fenced code block, matching the GitHub formatter). Previously
+  `formatGitLabNote` rendered only `SuggestedComment` and `FixHint`,
+  silently dropping any model-supplied evidence — meaning the same
+  finding posted to a GitHub PR vs a GitLab MR showed different
+  amounts of supporting context. The new prompt rule from
+  `diffsmith-flk` actively encourages models to put deeper detail in
+  `evidence`, which made the asymmetric loss more visible. The fix
+  hint style is unchanged (italic `*Fix hint:*` prefix on GitLab vs
+  fenced code block on GitHub) since fix hints are usually prose,
+  not code. (`diffsmith-75z`)
 
 ## v0.1.4 — 2026-05-26
 
