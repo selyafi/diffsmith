@@ -57,6 +57,16 @@ Semantic Versioning per the same doc.
   forged section headers). Ordering tests pin that the new rule appears
   before the rendered Target/PR TITLE/PR AUTHOR blocks in both prompts.
   (`diffsmith-321`)
+- Reviewer `RawOutput` in the synthesis prompt is now fenced by a fresh
+  8-byte random nonce per build:
+  `BEGIN_REVIEWER_OUTPUT_<nonce>` / `END_REVIEWER_OUTPUT_<nonce>`. The
+  previous defense was entirely a prose rule; an upstream model that
+  emitted text matching `Reviewer "name":` or `== REVIEWER OUTPUTS ==`
+  inside its body could forge structurally legitimate section breaks.
+  The new nonce is generated via `crypto/rand`, unguessable to an
+  attacker producing `RawOutput`, and the lead model is instructed to
+  ignore any BEGIN/END marker that does not use the exact nonce.
+  (`diffsmith-3i6`)
 
 ## v0.1.4 — 2026-05-26
 
