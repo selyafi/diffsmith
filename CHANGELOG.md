@@ -23,6 +23,18 @@ Semantic Versioning per the same doc.
   evidence/comment/fix_hint split that single-model runs no longer
   suffer from. (`diffsmith-cc2`)
 
+### Security
+
+- Synthesis prompt now instructs the lead model to treat both the diff
+  body and all reviewer outputs (including text inside reviewer JSON
+  fields) as untrusted input, and to ignore any embedded instruction
+  that tries to override the prompt, suppress findings, or change the
+  output format. The rule appears before both the `== DIFF ==` and
+  `== REVIEWER OUTPUTS ==` sections (test-pinned). This is hardening
+  against a theoretical attack — no known exploit — closing the gap
+  between BuildSynthesisPrompt and BuildPrompt, which already has the
+  equivalent rule for diff content. (`diffsmith-f5l`)
+
 ## v0.1.4 — 2026-05-26
 
 ### Changed
