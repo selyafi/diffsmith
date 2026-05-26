@@ -18,10 +18,11 @@ var priorityOrder = map[string]int{
 
 // SelectedModels is the user's picker choice carried through the
 // review pipeline. All is sorted by priority (codex > claude > gemini
-// > antigravity); Lead == All[0] when non-empty, nil otherwise.
+// > antigravity). The synthesis-lead-priority concept is encoded in
+// the All ordering itself — callers that need "the highest-priority
+// surviving model" iterate All in order; the first match wins.
 type SelectedModels struct {
-	All  []Model
-	Lead Model
+	All []Model
 }
 
 // NewSelectedModels returns a SelectedModels with All sorted by the
@@ -33,11 +34,7 @@ func NewSelectedModels(ms []Model) *SelectedModels {
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return priorityOf(sorted[i].Name()) < priorityOf(sorted[j].Name())
 	})
-	var lead Model
-	if len(sorted) > 0 {
-		lead = sorted[0]
-	}
-	return &SelectedModels{All: sorted, Lead: lead}
+	return &SelectedModels{All: sorted}
 }
 
 func priorityOf(name string) int {

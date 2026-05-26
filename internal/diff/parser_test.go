@@ -3,6 +3,7 @@ package diff
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -87,6 +88,34 @@ func TestParseRealGitHubPR(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected .github/workflows/codeql.yml in fixture; fixture may have been replaced")
+	}
+}
+
+// TestConvertLinesRejectsMalformedMarker verifies convertLines fails
+// loud when a hunk body contains an unexpected leading byte. Earlier
+// the parser silently skipped such lines, which left subsequent rows
+// with the wrong NewLine counter — meaning a finding anchored to a
+// "valid" later line could land on the wrong row of a real PR/MR.
+// The new behavior surfaces a categorized error so Parse fails before
+// findings can be wrongly anchored.
+//
+// We exercise convertLines directly because go-diff's MultiFileDiffReader
+// terminates a hunk at the first non-marker byte (treating it as a
+// section break), so a synthetic malformed *file*-level diff would never
+// reach our switch. In production this matters because go-diff hands us
+// the body it parsed; if a future format change ever lets a stray
+// marker through, convertLines is the layer that catches it.
+func TestConvertLinesRejectsMalformedMarker(t *testing.T) {
+	// Body where the second body line has a `?` marker — invalid in
+	// unified-diff format. convertLines must refuse to assign positions
+	// against such a body.
+	body := []byte(" context\n?bogus marker\n+added\n")
+	_, err := convertLines(10, body)
+	if err == nil {
+		t.Fatal("convertLines must reject a malformed marker; got nil error")
+	}
+	if !strings.Contains(err.Error(), "malformed hunk") {
+		t.Errorf("error should categorize the failure as 'malformed hunk'; got: %v", err)
 	}
 }
 

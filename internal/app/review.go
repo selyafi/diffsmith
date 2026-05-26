@@ -173,6 +173,13 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 			for _, candidate := range surviving {
 				leadModel := findModelByName(selected.All, candidate.Model)
 				if leadModel == nil {
+					// Surface the skip so a silent "name doesn't
+					// match" doesn't masquerade as a synthesis
+					// failure later. In practice this shouldn't
+					// fire — outcome.Model always comes from a
+					// model in selected.All — but if it ever does
+					// (drift, rename), the user sees the cause.
+					send(tui.PhaseStatusMsg(fmt.Sprintf("skipping synthesis with %s: no matching model registered", candidate.Model)))
 					continue
 				}
 				send(tui.PhaseStatusMsg(fmt.Sprintf("Synthesizing with %s…", candidate.Model)))
@@ -193,7 +200,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		valid, quarantined := review.Validate(final.Findings, final.Model, idx)
 
 		runSummary = buildRunSummary(selected.All, surviving, dropped, synthesisLeadName, len(final.Findings))
-		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined, RunSummary: runSummary})
+		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined})
 	}
 	if err := runTUI(loader, pipeline); err != nil {
 		return err

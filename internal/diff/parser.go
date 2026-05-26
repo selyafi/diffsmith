@@ -27,11 +27,15 @@ func Parse(unified string) ([]*DiffFile, error) {
 			return nil, fmt.Errorf("read file diff: %w", err)
 		}
 
+		hunks, err := convertHunks(fd.Hunks)
+		if err != nil {
+			return nil, fmt.Errorf("convert hunks for %s: %w", stripDiffPrefix(fd.NewName), err)
+		}
 		df := &DiffFile{
 			Path:    stripDiffPrefix(fd.NewName),
 			OldPath: stripDiffPrefix(fd.OrigName),
 			Kind:    classify(fd),
-			Hunks:   convertHunks(fd.Hunks),
+			Hunks:   hunks,
 		}
 		// OldPath is only meaningful when it names a real previous path.
 		// Collapse it to "" when it duplicates Path (unchanged path) or
@@ -93,21 +97,25 @@ func classify(fd *godiff.FileDiff) FileKind {
 	return FileText
 }
 
-func convertHunks(hs []*godiff.Hunk) []Hunk {
+func convertHunks(hs []*godiff.Hunk) ([]Hunk, error) {
 	if len(hs) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]Hunk, 0, len(hs))
-	for _, h := range hs {
+	for hi, h := range hs {
+		lines, err := convertLines(int(h.NewStartLine), h.Body)
+		if err != nil {
+			return nil, fmt.Errorf("hunk %d (new line %d): %w", hi+1, h.NewStartLine, err)
+		}
 		out = append(out, Hunk{
 			OldStart: int(h.OrigStartLine),
 			OldLines: int(h.OrigLines),
 			NewStart: int(h.NewStartLine),
 			NewLines: int(h.NewLines),
-			Lines:    convertLines(int(h.NewStartLine), h.Body),
+			Lines:    lines,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // convertLines walks the hunk body and assigns post-image line numbers.
@@ -115,13 +123,21 @@ func convertHunks(hs []*godiff.Hunk) []Hunk {
 // Unified-diff body format: each line begins with " " (context), "+"
 // (added), or "-" (deleted). Lines that begin with "\" are no-newline
 // markers and are skipped (they belong to the previous content line).
-func convertLines(newStart int, body []byte) []HunkLine {
+//
+// Any other leading byte means the diff is malformed. Returning an
+// error here is essential: a silent skip would leave subsequent lines
+// with whatever NewLine counter the parser happened to reach, so any
+// finding anchored to a "valid" later line could land on the wrong
+// row of the user's PR/MR. Better to fail Parse loudly and let the
+// caller surface the bad input than to publish wrongly-anchored
+// review comments.
+func convertLines(newStart int, body []byte) ([]HunkLine, error) {
 	if len(body) == 0 {
-		return nil
+		return nil, nil
 	}
 	var out []HunkLine
 	lineNo := newStart
-	for _, raw := range splitBody(body) {
+	for i, raw := range splitBody(body) {
 		if len(raw) == 0 {
 			continue
 		}
@@ -139,12 +155,10 @@ func convertLines(newStart int, body []byte) []HunkLine {
 			// "\ No newline at end of file" — annotation, not a real line.
 			continue
 		default:
-			// Defensive: an unexpected marker means the diff is malformed.
-			// Skip rather than crash; the validator will surface zero
-			// findings if the whole file is unparseable.
+			return nil, fmt.Errorf("malformed hunk: unexpected marker %q at body line %d", marker, i+1)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // splitBody splits a hunk body into its constituent lines, keeping each

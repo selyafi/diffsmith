@@ -32,7 +32,6 @@ type LoaderModel struct {
 	review        *Model
 	quarantined   []review.Quarantined
 	totalReviewed int
-	runSummary    string
 }
 
 type modelStatusLine struct {
@@ -50,14 +49,16 @@ type LoadErrorMsg struct{ Err error }
 
 // LoadReadyMsg hands validated findings + quarantined ones to the loader.
 // After this arrives the loader transitions to the inner ReviewModel.
+//
+// The per-run summary string (which models ran, counts, synthesis lead)
+// is intentionally NOT carried on this message — it lives as a closure
+// variable in the caller (app/review.go) and is written to stdout after
+// the loader exits. Keeping it out of the loader avoids dead state on
+// the model and keeps the run-summary write outside the TUI's render
+// loop where it belongs.
 type LoadReadyMsg struct {
 	Findings    []review.Finding
 	Quarantined []review.Quarantined
-	// RunSummary is a pre-formatted one-liner describing what each
-	// selected model contributed (raw counts) and whether synthesis
-	// ran. Printed after the TUI exits so users can audit multi-model
-	// runs.
-	RunSummary string
 }
 
 // NewLoaderModel constructs a LoaderModel with a default-styled spinner
@@ -108,7 +109,6 @@ func (m *LoaderModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LoadReadyMsg:
 		m.quarantined = msg.Quarantined
 		m.totalReviewed = len(msg.Findings)
-		m.runSummary = msg.RunSummary
 		m.review = NewModel(msg.Findings)
 		return m, m.review.Init()
 
@@ -199,11 +199,6 @@ func (m *LoaderModel) GetFindingsMarkedForPost() []review.Finding {
 // Quarantined returns the validator-rejected findings (or nil before
 // load completes).
 func (m *LoaderModel) Quarantined() []review.Quarantined { return m.quarantined }
-
-// RunSummary returns the multi-model run audit string (e.g.,
-// "Models: codex (5), claude (3) → synthesized via codex into 2 findings"),
-// or empty if no summary was set.
-func (m *LoaderModel) RunSummary() string { return m.runSummary }
 
 // TotalReviewed is the number of valid findings handed to the inner
 // ReviewModel (i.e., what the user saw in the TUI), used by writeFindings

@@ -29,6 +29,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Clear any transient status from the prior keypress so each
+	// message lives for exactly one interaction. Handlers below can
+	// set m.transientStatus again before this Update returns.
+	m.transientStatus = ""
+
 	// Edit mode: the textarea owns most key input. Only esc (cancel) and
 	// ctrl+s (save) toggle back to normal mode.
 	if m.editMode {
@@ -59,7 +64,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.DismissCurrent()
 	case "c":
 		if cur := m.CurrentFinding(); cur != nil {
-			_ = copyToClipboard(cur.SuggestedComment)
+			if err := copyToClipboard(cur.SuggestedComment); err != nil {
+				// Surface the failure in the footer so the user
+				// doesn't silently paste stale clipboard content
+				// into a real review thread. Common cause on
+				// Linux: neither xclip nor wl-copy installed.
+				m.transientStatus = "Copy failed: " + err.Error()
+			} else {
+				m.transientStatus = "Copied to clipboard"
+			}
 		}
 	case "p":
 		m.MarkCurrentForPost()

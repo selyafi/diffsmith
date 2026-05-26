@@ -33,8 +33,9 @@ func TestNewSelectedModels_SortsByPriority(t *testing.T) {
 			t.Errorf("position %d: got %s, want %s", i, m.Name(), want[i])
 		}
 	}
-	if got.Lead.Name() != "codex" {
-		t.Errorf("lead: got %s, want codex", got.Lead.Name())
+	// Callers that want "the synthesis lead" read All[0] directly.
+	if got.All[0].Name() != "codex" {
+		t.Errorf("lead: got %s, want codex", got.All[0].Name())
 	}
 }
 
@@ -43,11 +44,11 @@ func TestNewSelectedModels_LeadSkipsCodexWhenAbsent(t *testing.T) {
 		stubModel{name: "antigravity"},
 		stubModel{name: "claude"},
 	})
-	if got.Lead.Name() != "claude" {
-		t.Errorf("lead: got %s, want claude", got.Lead.Name())
+	if got.All[0].Name() != "claude" {
+		t.Errorf("lead (All[0]): got %s, want claude", got.All[0].Name())
 	}
-	if got.All[0].Name() != "claude" || got.All[1].Name() != "antigravity" {
-		t.Errorf("order: got %s, %s", got.All[0].Name(), got.All[1].Name())
+	if got.All[1].Name() != "antigravity" {
+		t.Errorf("order: got %s, want antigravity", got.All[1].Name())
 	}
 }
 
@@ -55,9 +56,6 @@ func TestNewSelectedModels_EmptyIsValid(t *testing.T) {
 	got := model.NewSelectedModels(nil)
 	if len(got.All) != 0 {
 		t.Errorf("expected 0 models, got %d", len(got.All))
-	}
-	if got.Lead != nil {
-		t.Errorf("expected nil lead for empty selection, got %v", got.Lead)
 	}
 }
 

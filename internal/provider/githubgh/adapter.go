@@ -36,10 +36,10 @@ func (a *Adapter) Supports(rawURL string) bool {
 }
 
 // Preflight verifies gh is on PATH and authenticated before any fetch.
+// New always wires a.preflight, and Adapter's fields are unexported so
+// no zero-value literal can escape the package — a defensive nil-init
+// here would be dead code.
 func (a *Adapter) Preflight(ctx context.Context) error {
-	if a.preflight == nil {
-		a.preflight = NewPreflight(a.run, nil)
-	}
 	return a.preflight.Check(ctx)
 }
 

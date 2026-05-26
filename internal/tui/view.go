@@ -226,6 +226,12 @@ func (m *Model) renderFooter() string {
 	if m.editMode {
 		return footerStyle.Render("Edit:  ctrl+s = save  |  esc = cancel  |  arrows = move cursor")
 	}
+	// A transient status preempts the keybinding hint for one tick so
+	// the user sees feedback from their last action (copy success or
+	// failure, etc.). It clears at the top of the next Update.
+	if m.transientStatus != "" {
+		return footerStyle.Render(m.transientStatus)
+	}
 	return footerStyle.Render(
 		"↑↓ navigate  |  e edit  |  a approve  |  d dismiss  |  c copy  |  p mark-post  |  q back",
 	)

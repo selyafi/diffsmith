@@ -42,6 +42,18 @@ func TestCompareVersions(t *testing.T) {
 		{"v0.1.0", "v0.1.0", 0},
 		{"v1.0.0", "v0.9.0", +1},
 		{"v0.1.0", "0.1.0", 0}, // leading 'v' optional
+		// Multi-digit segments: a naive string compare would say
+		// "10" < "9" because '1' < '9'. Real semver ordering must
+		// recognise v0.10.0 > v0.9.0, or the update notifier
+		// silently stops firing the moment a project reaches v0.10.x.
+		{"v0.10.0", "v0.9.0", +1},
+		{"v1.2.10", "v1.2.9", +1},
+		// Prerelease suffix: per semver, v0.1.0-rc1 < v0.1.0 (the
+		// release supersedes its release candidate). A naive string
+		// compare would get this backwards because "0.1.0-rc1" >
+		// "0.1.0" lexicographically (the longer string wins).
+		{"v0.1.0", "v0.1.0-rc1", +1},
+		{"v0.1.0-rc1", "v0.1.0-rc2", -1},
 	}
 	for _, c := range cases {
 		got := compareVersions(c.a, c.b)

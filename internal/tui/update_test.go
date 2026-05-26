@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -101,6 +103,57 @@ func TestUpdateCopyOnC(t *testing.T) {
 
 	if captured != "Fix this leak" {
 		t.Errorf("'c' should copy current finding's SuggestedComment; got %q", captured)
+	}
+}
+
+// TestUpdateCopyOnC_SurfacesError verifies that when copyToClipboard
+// fails (e.g. Linux user with no xclip/wl-copy installed), the error
+// reaches a user-visible status on the model so the View can show it
+// in the footer. Without this, pressing 'c' silently does nothing and
+// the user pastes stale clipboard content into a real review thread.
+func TestUpdateCopyOnC_SurfacesError(t *testing.T) {
+	prev := copyToClipboard
+	copyToClipboard = func(_ string) error {
+		return errors.New("xclip: command not found")
+	}
+	t.Cleanup(func() { copyToClipboard = prev })
+
+	m := NewModel([]review.Finding{
+		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T", SuggestedComment: "x", Model: "test", Confidence: 0.5},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+
+	status := m.TransientStatus()
+	if status == "" {
+		t.Fatal("'c' on a copy failure must set a transient status; got empty")
+	}
+	if !strings.Contains(status, "Copy failed") {
+		t.Errorf("status should indicate copy failure; got %q", status)
+	}
+	if !strings.Contains(status, "xclip") {
+		t.Errorf("status should include the underlying error; got %q", status)
+	}
+}
+
+// TestUpdateCopyOnC_ClearsOnNextKey verifies that the transient
+// status is cleared by the next keypress, so successive operations
+// don't leave stale messages in the footer.
+func TestUpdateCopyOnC_ClearsOnNextKey(t *testing.T) {
+	prev := copyToClipboard
+	copyToClipboard = func(_ string) error { return errors.New("nope") }
+	t.Cleanup(func() { copyToClipboard = prev })
+
+	m := NewModel([]review.Finding{
+		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T", SuggestedComment: "x", Model: "test", Confidence: 0.5},
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if m.TransientStatus() == "" {
+		t.Fatal("setup: failure status should be set after first 'c'")
+	}
+	// Any subsequent key (down here) should clear the prior status.
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if m.TransientStatus() != "" {
+		t.Errorf("transient status must clear on next keypress; still got %q", m.TransientStatus())
 	}
 }
 

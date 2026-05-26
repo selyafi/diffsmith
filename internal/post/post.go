@@ -309,6 +309,13 @@ func submitReview(ctx context.Context, reviewID string) (string, error) {
 	if err := json.Unmarshal(out, &resp); err != nil {
 		return "", fmt.Errorf("decode submit response: %w", err)
 	}
+	// Mirror the empty-field guards on resolvePRID + beginReview. Without
+	// this, a malformed-shape 200 response would fall through and the
+	// caller would print "Posted review: " with no URL — looks successful,
+	// isn't recoverable, user can't find the review on GitHub.
+	if resp.Data.SubmitPullRequestReview.PullRequestReview.URL == "" {
+		return "", fmt.Errorf("empty review URL in response: %s", string(out))
+	}
 	return resp.Data.SubmitPullRequestReview.PullRequestReview.URL, nil
 }
 

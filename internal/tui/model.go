@@ -25,7 +25,20 @@ type Model struct {
 
 	editMode bool
 	editor   textarea.Model
+
+	// transientStatus is an ephemeral footer message set by actions
+	// that need user feedback (e.g. "Copy failed: xclip not found").
+	// Cleared at the top of every key-driven Update so it disappears
+	// on the next interaction — the user sees it for the duration of
+	// the keypress that produced it, no longer.
+	transientStatus string
 }
+
+// TransientStatus returns the current ephemeral status message, or ""
+// if none. The View consults this to render a transient line in the
+// footer; tests assert against it to verify user-visible feedback
+// without rendering the full TUI.
+func (m *Model) TransientStatus() string { return m.transientStatus }
 
 // NewModel constructs a TUI Model with the given findings.
 func NewModel(findings []review.Finding) *Model {

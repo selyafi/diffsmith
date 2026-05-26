@@ -16,10 +16,17 @@ func defaultCommand() (*exec.Cmd, error) {
 	case "darwin":
 		return exec.Command("pbcopy"), nil
 	case "linux":
+		// Probe both. The previous version returned xclip blindly when
+		// wl-copy was missing, which on a Wayland machine without xclip
+		// installed produced a confusing exec error mid-keystroke.
+		// Now: if neither is on PATH, fail loudly with the install hint.
 		if _, err := exec.LookPath("wl-copy"); err == nil {
 			return exec.Command("wl-copy"), nil
 		}
-		return exec.Command("xclip", "-selection", "clipboard"), nil
+		if _, err := exec.LookPath("xclip"); err == nil {
+			return exec.Command("xclip", "-selection", "clipboard"), nil
+		}
+		return nil, fmt.Errorf("clipboard: install wl-copy (Wayland) or xclip (X11) — neither is on PATH")
 	case "windows":
 		return exec.Command("clip"), nil
 	default:

@@ -28,6 +28,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -82,17 +84,24 @@ func isReleaseVersion(v string) bool {
 }
 
 // compareVersions returns +1 if a > b, -1 if a < b, 0 if equal.
-// Strips the leading 'v' before comparing.
+// Accepts versions with or without a leading 'v' — we normalise to
+// the 'v'-prefixed form before delegating to golang.org/x/mod/semver,
+// which requires the prefix.
 //
-// Implementation note: uses strings.Compare on the trimmed values.
-// That's lexicographically correct for our common case (vX.Y.Z patch
-// bumps within a digit-width). For pre-release suffix ordering
-// (v0.2.0-rc1 < v0.2.0) we'd need a real semver parser; v1.x
-// improvement if release variety grows beyond simple semver.
+// Earlier implementation used strings.Compare and got bitten the
+// instant any segment crossed a digit-width boundary: lexicographic
+// ordering says "10" < "9", so v0.10.0 looked older than v0.9.0 to
+// the notifier. semver.Compare also handles prerelease suffixes
+// correctly (v0.1.0-rc1 < v0.1.0), which we need for our own
+// rc-prefixed tags.
 func compareVersions(a, b string) int {
-	a = strings.TrimPrefix(a, "v")
-	b = strings.TrimPrefix(b, "v")
-	return strings.Compare(a, b)
+	if !strings.HasPrefix(a, "v") {
+		a = "v" + a
+	}
+	if !strings.HasPrefix(b, "v") {
+		b = "v" + b
+	}
+	return semver.Compare(a, b)
 }
 
 func defaultHTTPFetcher(ctx context.Context) (string, error) {
