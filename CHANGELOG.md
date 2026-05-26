@@ -4,7 +4,7 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
-## v0.1.0 — Unreleased
+## v0.1.0 — 2026-05-26
 
 First public release. See `docs/v1-scope.md` for the full v1 contract and
 `docs/dev-plan/release-plan.md` § v1 Release Gate for the authoritative
