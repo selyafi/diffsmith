@@ -3,44 +3,132 @@
 package repodetect
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/selyafi/diffsmith/internal/provider"
 )
 
+// sshResolverTimeout bounds the ssh -G subprocess. ssh_config can run
+// arbitrary commands via `Match exec` and read includes over slow shares;
+// without a deadline a hostile or misconfigured config would hang Detect()
+// indefinitely.
+const sshResolverTimeout = 5 * time.Second
+
 // sshHostResolver maps an ssh_config alias (e.g. "github-shelyafi") to
 // the real hostname (e.g. "github.com"). Exposed as a package variable
 // so tests can stub it; production wiring points at resolveSSHHost.
+//
+// Other shell-out sites in this codebase (preflight, model adapters)
+// use struct-field injection. This package is free-function style
+// (Detect, runGit), so a package var is the least-invasive test seam
+// here. Not safe for t.Parallel — tests that mutate it must run
+// sequentially. Revisit if more state ever needs injection.
 var sshHostResolver = resolveSSHHost
 
 // resolveSSHHost shells out to `ssh -G <alias>` and returns the resolved
-// hostname. ssh -G applies the user's ssh_config and prints the canonical
-// hostname on a `hostname <value>` line. For non-alias inputs, ssh -G
-// echoes the input back as the hostname.
+// hostname. ssh -G applies the user's ssh_config and emits one
+// `hostname <value>` line. Bounded by sshResolverTimeout; stderr is
+// captured so warnings on a still-exit-0 path are surfaced in errors.
 func resolveSSHHost(alias string) (string, error) {
-	out, err := exec.Command("ssh", "-G", alias).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), sshResolverTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ssh", "-G", alias)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
-			return "", fmt.Errorf("ssh -G %s: %w: %s", alias, err, strings.TrimSpace(string(ee.Stderr)))
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("ssh -G %s: timed out after %s (check ssh_config for slow Match exec / Include directives)", alias, sshResolverTimeout)
+		}
+		if stderr.Len() > 0 {
+			return "", fmt.Errorf("ssh -G %s: %w: %s", alias, err, strings.TrimSpace(stderr.String()))
 		}
 		return "", fmt.Errorf("ssh -G %s: %w", alias, err)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "hostname ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "hostname ")), nil
-		}
+	host, perr := parseSSHGHostname(out)
+	if perr != nil {
+		return "", fmt.Errorf("ssh -G %s: %w", alias, perr)
 	}
-	return "", fmt.Errorf("ssh -G %s: no hostname in output", alias)
+	return host, nil
 }
 
-// parseRemoteURL maps a git remote URL (ssh or https) to a RepoCoord.
-// Supports nested paths (GitLab subgroups) by treating everything up to
-// the final path segment as the owner. SSH URLs have their host resolved
-// through ssh_config so aliases like `git@github-shelyafi:...` map to the
-// real hostname before provider dispatch.
+// parseSSHGHostname extracts the resolved hostname from ssh -G stdout.
+// Returns an error if the output has no `hostname <value>` line or the
+// value is empty — both signal a malformed ssh_config that callers
+// should fail loud on, not silently treat as the literal alias.
+func parseSSHGHostname(out []byte) (string, error) {
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "hostname ") {
+			continue
+		}
+		host := strings.TrimSpace(strings.TrimPrefix(line, "hostname "))
+		if host == "" {
+			return "", errors.New("hostname line has empty value")
+		}
+		return host, nil
+	}
+	return "", errors.New("no hostname line in output")
+}
+
+// validateSSHHost rejects host strings that would be misinterpreted by
+// ssh -G as command-line flags. A remote URL of `git@-oProxyCommand=...:`
+// produces host=`-oProxyCommand=...`; passing that as argv to ssh lets a
+// hostile repo control the user's ssh client. Same family as
+// git CVE-2017-1000117. Empty hosts are rejected up-front too — they
+// can never be valid ssh aliases or DNS names.
+func validateSSHHost(host string) error {
+	if host == "" {
+		return errors.New("empty ssh host")
+	}
+	if strings.HasPrefix(host, "-") {
+		return fmt.Errorf("ssh host %q starts with '-' (would be interpreted as a flag)", host)
+	}
+	return nil
+}
+
+// resolveSSHHostIfAlias gates ssh_config resolution on the dot-heuristic:
+// only hosts WITHOUT a dot are treated as potential aliases and run
+// through sshHostResolver. Real DNS hostnames (github.com, gitlab.com,
+// any self-hosted forge) and IP literals always contain a dot and skip
+// the resolver entirely. This avoids three sharp edges:
+//
+//   - A hard `ssh`-on-PATH dependency for the canonical case (minimal
+//     containers without openssh-client previously parsed `git@github.com`
+//     without invoking ssh).
+//   - The `Host * / HostName proxy` wildcard hijack — a corp ProxyJump
+//     config silently rewrites `github.com` to a bastion and breaks
+//     provider dispatch even though the URL the user typed is a forge
+//     identity, not an SSH transport target.
+//   - ~30-150ms ssh fork cost on every Detect() in the common case.
+func resolveSSHHostIfAlias(host string) (string, error) {
+	if err := validateSSHHost(host); err != nil {
+		return "", err
+	}
+	if strings.Contains(host, ".") {
+		return host, nil
+	}
+	resolved, err := sshHostResolver(host)
+	if err != nil {
+		return "", fmt.Errorf("resolve ssh host %q: %w", host, err)
+	}
+	if resolved == "" {
+		return "", fmt.Errorf("resolve ssh host %q: empty result", host)
+	}
+	return resolved, nil
+}
+
+// parseRemoteURL maps a git remote URL to a RepoCoord. Three forms are
+// supported: scp-style (`git@host:owner/.../name`), `ssh://[user@]host[:port]/path`,
+// and `https?://host/path`. Nested paths (GitLab subgroups) are handled
+// by treating everything up to the final segment as the owner. SSH
+// hosts that look like aliases (no dot) are resolved through ssh_config
+// via `ssh -G`; dotted hosts are taken literally.
 func parseRemoteURL(raw string) (provider.RepoCoord, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -58,9 +146,29 @@ func parseRemoteURL(raw string) (provider.RepoCoord, error) {
 		}
 		host = rest[:colon]
 		path = rest[colon+1:]
-		resolved, err := sshHostResolver(host)
+		resolved, err := resolveSSHHostIfAlias(host)
 		if err != nil {
-			return provider.RepoCoord{}, fmt.Errorf("repodetect: resolve ssh host %q: %w", host, err)
+			return provider.RepoCoord{}, fmt.Errorf("repodetect: %w (in %q)", err, raw)
+		}
+		host = resolved
+	case strings.HasPrefix(s, "ssh://"):
+		// ssh://[user@]host[:port]/owner/.../name(.git)?
+		rest := strings.TrimPrefix(s, "ssh://")
+		if at := strings.Index(rest, "@"); at >= 0 {
+			rest = rest[at+1:]
+		}
+		slash := strings.Index(rest, "/")
+		if slash < 0 {
+			return provider.RepoCoord{}, fmt.Errorf("repodetect: malformed ssh url %q", raw)
+		}
+		host = rest[:slash]
+		path = rest[slash+1:]
+		if colon := strings.Index(host, ":"); colon >= 0 {
+			host = host[:colon]
+		}
+		resolved, err := resolveSSHHostIfAlias(host)
+		if err != nil {
+			return provider.RepoCoord{}, fmt.Errorf("repodetect: %w (in %q)", err, raw)
 		}
 		host = resolved
 	case strings.HasPrefix(s, "https://"), strings.HasPrefix(s, "http://"):
@@ -99,6 +207,12 @@ func parseRemoteURL(raw string) (provider.RepoCoord, error) {
 // RepoCoord. Looks at remote.origin first; falls back to the only
 // remote if origin isn't set; errors on 0 or multiple-non-origin
 // remotes per spec §6.
+//
+// For SSH remotes whose host looks like an ssh_config alias (no dot in
+// the host portion), Detect shells out to `ssh -G` to resolve the real
+// hostname before returning. This requires `ssh` on PATH when such an
+// alias is in use; canonical hosts like `git@github.com:...` skip the
+// resolver and have no new runtime dependency.
 func Detect() (provider.RepoCoord, error) {
 	originURL, err := runGit("config", "--get", "remote.origin.url")
 	if err == nil && strings.TrimSpace(originURL) != "" {

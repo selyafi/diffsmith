@@ -12,8 +12,16 @@ Semantic Versioning per the same doc.
   `ssh -G` before provider dispatch, so remotes like
   `git@github-shelyafi:owner/repo.git` route to the GitHub adapter
   instead of failing with `provider: host "github-shelyafi" not
-  supported`. Resolver failures propagate loudly rather than silently
-  falling back to the literal alias (`diffsmith-neq`).
+  supported`. Resolution is gated on a dot-heuristic — only hosts
+  without a dot are treated as aliases, so canonical remotes like
+  `git@github.com:...` continue to parse without invoking `ssh` and
+  without depending on `ssh` being on PATH. The `ssh://` URL scheme
+  is now also recognized. Hosts starting with `-` are rejected before
+  invoking `ssh` to prevent argv flag-injection (git CVE-2017-1000117
+  family). Resolver calls are bounded by a 5s timeout to survive slow
+  `Match exec` / `Include` directives. Empty resolved hostnames and
+  malformed `ssh -G` output are reported as errors rather than
+  silently coerced to an empty host. (`diffsmith-neq`)
 
 ## v0.1.0 — 2026-05-26
 
