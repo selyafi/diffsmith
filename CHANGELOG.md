@@ -4,6 +4,20 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## Unreleased
+
+### Changed
+
+- Review prompt now instructs models that `suggested_comment` must be
+  self-sufficient (a reviewer reading only that field should understand
+  the issue and the direction of the fix), that the key rationale
+  belongs in `suggested_comment` rather than `evidence`, and that the
+  comment must reference the specific code element by name. Reduces the
+  per-finding merge tax where reviewers were combining `evidence` /
+  `suggested_comment` / `fix_hint` back into one prose blob by hand.
+  The schema and product boundary from ADR 0005 are unchanged.
+  (`diffsmith-flk`)
+
 ## v0.1.4 — 2026-05-26
 
 ### Changed
