@@ -64,11 +64,14 @@ func newRootCmd() *cobra.Command {
 			}
 			return runInboxCommandWithSelected(cmd, rootFlags, registry, selected)
 		},
-		// PersistentPostRun fires after every subcommand (review, inbox)
-		// AND after the bare-root RunE. update.Check is silent on any
-		// failure and bounded by a 3-second HTTP timeout, so it can
-		// never block or break the user-facing flow.
-		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		// PersistentPreRun fires BEFORE every subcommand (review, inbox)
+		// and before the bare-root RunE. Running at startup means users
+		// see an upgrade notice immediately, and the check still fires
+		// when the subcommand later errors — which is when an upgrade
+		// hint is most useful. update.Check is silent on any failure
+		// and bounded by a 3-second HTTP timeout; the common cache-hit
+		// path is an O(1) file read.
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()

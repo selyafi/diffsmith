@@ -2,9 +2,12 @@ package app
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/selyafi/diffsmith/internal/provider/githubgh"
 	"github.com/selyafi/diffsmith/internal/provider/gitlabglab"
@@ -71,5 +74,42 @@ func TestReviewRequiresURLArgument(t *testing.T) {
 
 	if err := root.Execute(); err == nil {
 		t.Fatal("review without a URL argument should error")
+	}
+}
+
+func TestRoot_UpdateCheckFiresOnStartupEvenWhenSubcommandErrors(t *testing.T) {
+	// Regression: the update notification must fire BEFORE the user's
+	// subcommand runs (PersistentPreRun), not after it (PostRun). Two
+	// reasons: users see the prompt before they start working, and the
+	// check still runs when the subcommand errors out — which is when
+	// users most need an "upgrade available" hint.
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	cacheFile := filepath.Join(cacheRoot, "diffsmith", "latest-version.json")
+	if err := os.MkdirAll(filepath.Dir(cacheFile), 0o755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	seeded := `{"latest_version":"v9.9.9","checked_at":"` + time.Now().Format(time.RFC3339Nano) + `"}`
+	if err := os.WriteFile(cacheFile, []byte(seeded), 0o644); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	prevVersion := version
+	t.Cleanup(func() { version = prevVersion })
+	version = "v0.1.0" // any valid release tag older than the cached "v9.9.9"
+
+	root := newRootCmd()
+	var stderr bytes.Buffer
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&stderr)
+	// A URL that passes Args validation (ExactArgs(1)) but no registered
+	// provider supports — RunE errors. With PreRun, the update check
+	// still fires; with PostRun, it would not.
+	root.SetArgs([]string{"review", "https://example.com/owner/repo/pull/1"})
+
+	_ = root.Execute() // we expect an error here; the test cares about stderr
+
+	if !strings.Contains(stderr.String(), "v9.9.9 available") {
+		t.Errorf("update notification must fire even when subcommand errors; stderr:\n%s", stderr.String())
 	}
 }

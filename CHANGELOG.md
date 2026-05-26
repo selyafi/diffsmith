@@ -4,6 +4,17 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.1.4 — 2026-05-26
+
+### Changed
+
+- Update-availability check now runs at startup (cobra `PersistentPreRun`)
+  instead of on exit. Two consequences: the upgrade notice appears
+  before the inbox/TUI opens (users see it before they start working),
+  and the check fires even when the subcommand later errors — so a
+  user whose invocation is broken by a fixed-upstream bug now actually
+  gets the hint that an upgrade is available. (`diffsmith-q5v`)
+
 ## v0.1.3 — 2026-05-26
 
 ### Fixed
