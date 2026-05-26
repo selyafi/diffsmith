@@ -10,30 +10,30 @@ Diffsmith has no server. The selected model CLI may still send diffs to its own 
 
 ## Current Status
 
-v0.1.0 release-prep (M8). The product is built end-to-end: GitHub + GitLab providers, Codex + Claude model adapters, three-pane TUI, clipboard/export, optional posting seam, prompt-injection-resilient parser. Acceptance happy-path runs against live PRs/MRs and clean-machine install verification remain before tagging. See [CHANGELOG.md](CHANGELOG.md) for the v0.1.0 release notes draft.
+[v0.1.0-rc1](https://github.com/selyafi/diffsmith/releases/tag/v0.1.0-rc1) released (M8). The product is built end-to-end: GitHub + GitLab providers; Codex, Claude, and Gemini model adapters running in parallel with synthesis via a lead model; three-pane TUI; clipboard/export; inline review-thread posting back to GitHub PRs and GitLab MRs (gated by explicit confirmation); dedup-before-post against existing diffsmith threads; prompt-injection-resilient parser. See [CHANGELOG.md](CHANGELOG.md) for the v0.1.0 release notes.
 
 ## Product Thesis
 
 Most AI review tools fail by posting noisy comments directly into pull requests. Diffsmith takes the opposite approach:
 
 - Local-first CLI/TUI.
-- Explicit model selection.
+- Explicit model selection at startup via an interactive picker.
 - Suggested review comments are drafts.
 - Every suggested review comment is editable.
-- Publishing is manual copy/paste in v1.
+- Posting is opt-in per finding (`p` in the TUI) and requires an explicit `y` confirmation before any network call.
 - No backend.
 - No auto-posting.
 
-## Intended V1 Command
+## V1 Command
 
 ```sh
-diffsmith review <github-pr-url|gitlab-mr-url> --model codex
-diffsmith review <github-pr-url|gitlab-mr-url> --model claude
-diffsmith review <github-pr-url|gitlab-mr-url> --model gemini
-diffsmith review <github-pr-url|gitlab-mr-url> --model antigravity   # experimental in v1
+diffsmith review <github-pr-url|gitlab-mr-url>     # review a specific PR/MR
+diffsmith                                          # inbox: pick from your repo's open PRs/MRs
 ```
 
-V1 supports `codex`, `claude`, and `gemini` as fully tested adapters. `antigravity` (CLI binary: `agy`) is experimental in v1 and is currently disabled: selecting it returns a clear actionable error because the `agy` CLI has no non-interactive auth path. See `internal/model/antigravitycli/doc.go` for details.
+At startup, diffsmith probes which AI CLIs are installed (`codex`, `claude`, `gemini`) and shows an interactive picker. Any subset can be selected; their findings are merged by a synthesis pass via the highest-priority surviving model (priority order: codex → claude → gemini). `antigravity` (CLI binary: `agy`) is registered but disabled in v1 because the CLI has no non-interactive auth path; see `internal/model/antigravitycli/doc.go`.
+
+After review, `p` in the TUI marks findings for upstream posting. On quit, diffsmith asks for explicit `y` confirmation, then posts approved findings as inline review threads on the PR/MR. Findings whose `(file, line)` already has a diffsmith thread upstream are skipped with a summary line; pass `--repost` to bypass that dedup gate.
 
 ## Install
 
@@ -54,7 +54,7 @@ DIFFSMITH_VERSION=v0.1.0 INSTALL_DIR="$HOME/bin" \
 
 ### Via `go install`
 
-If you have Go 1.22+ installed:
+If you have Go 1.24+ installed:
 
 ```bash
 go install github.com/selyafi/diffsmith/cmd/diffsmith@latest
@@ -89,23 +89,24 @@ For repository access:
 
 For AI review:
 
-- `codex`, `claude`, or `gemini` CLI — at least one must be installed; the picker shows which are available at startup.
-- (`agy` for Antigravity is not a supported install path in v1; the adapter ships disabled — see "Intended V1 Command" above)
+- `codex`, `claude`, or `gemini` CLI — at least one must be installed and authenticated. The picker shows which are available at startup; all selected models run in parallel and a lead model synthesizes the final findings.
+- (`agy` for Antigravity is not a supported install path in v1; the adapter ships disabled — see "V1 Command" above)
 
 ## V1 Workflow
 
 1. Detect GitHub or GitLab from the URL.
 2. Fetch PR/MR metadata and diff through `gh` or `glab`.
 3. Normalize changed files, hunks, and line positions.
-4. Send a structured review prompt to the selected model CLI.
-5. Parse model output as JSON findings.
-6. Validate findings against the diff.
-7. Show findings in a terminal UI.
-8. Let the reviewer edit, approve, dismiss, and copy comments.
+4. Send a structured review prompt to each selected AI CLI in parallel.
+5. Parse each model's output as JSON findings (defensively — fenced or prose-wrapped output is unwrapped before parsing).
+6. Synthesize findings across models via a lead model that picks, merges, and rewrites.
+7. Validate findings against the diff (anchor file/line into the diff index).
+8. Show findings in a three-pane TUI; let the reviewer edit, approve, dismiss, copy, or mark for posting.
+9. On quit, with explicit `y` confirmation, post approved findings as inline review threads on the upstream PR/MR — skipping any whose `(file, line)` already has a diffsmith thread.
 
 ## V1 Non-Goals
 
-- No direct posting to GitHub/GitLab.
+- No automatic posting — every post requires explicit `y` confirmation.
 - No CI bot mode.
 - No hosted service.
 - No session resume.
