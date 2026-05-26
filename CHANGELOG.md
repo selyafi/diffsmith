@@ -4,7 +4,7 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
-## Unreleased
+## v0.1.1 — 2026-05-26
 
 ### Fixed
 
