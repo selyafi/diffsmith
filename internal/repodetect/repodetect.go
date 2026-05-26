@@ -11,9 +11,36 @@ import (
 	"github.com/selyafi/diffsmith/internal/provider"
 )
 
+// sshHostResolver maps an ssh_config alias (e.g. "github-shelyafi") to
+// the real hostname (e.g. "github.com"). Exposed as a package variable
+// so tests can stub it; production wiring points at resolveSSHHost.
+var sshHostResolver = resolveSSHHost
+
+// resolveSSHHost shells out to `ssh -G <alias>` and returns the resolved
+// hostname. ssh -G applies the user's ssh_config and prints the canonical
+// hostname on a `hostname <value>` line. For non-alias inputs, ssh -G
+// echoes the input back as the hostname.
+func resolveSSHHost(alias string) (string, error) {
+	out, err := exec.Command("ssh", "-G", alias).Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", fmt.Errorf("ssh -G %s: %w: %s", alias, err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", fmt.Errorf("ssh -G %s: %w", alias, err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "hostname ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "hostname ")), nil
+		}
+	}
+	return "", fmt.Errorf("ssh -G %s: no hostname in output", alias)
+}
+
 // parseRemoteURL maps a git remote URL (ssh or https) to a RepoCoord.
 // Supports nested paths (GitLab subgroups) by treating everything up to
-// the final path segment as the owner.
+// the final path segment as the owner. SSH URLs have their host resolved
+// through ssh_config so aliases like `git@github-shelyafi:...` map to the
+// real hostname before provider dispatch.
 func parseRemoteURL(raw string) (provider.RepoCoord, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -31,6 +58,11 @@ func parseRemoteURL(raw string) (provider.RepoCoord, error) {
 		}
 		host = rest[:colon]
 		path = rest[colon+1:]
+		resolved, err := sshHostResolver(host)
+		if err != nil {
+			return provider.RepoCoord{}, fmt.Errorf("repodetect: resolve ssh host %q: %w", host, err)
+		}
+		host = resolved
 	case strings.HasPrefix(s, "https://"), strings.HasPrefix(s, "http://"):
 		rest := s
 		rest = strings.TrimPrefix(rest, "https://")

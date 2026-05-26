@@ -4,6 +4,17 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## Unreleased
+
+### Fixed
+
+- `repodetect` now resolves SSH host aliases from `~/.ssh/config` via
+  `ssh -G` before provider dispatch, so remotes like
+  `git@github-shelyafi:owner/repo.git` route to the GitHub adapter
+  instead of failing with `provider: host "github-shelyafi" not
+  supported`. Resolver failures propagate loudly rather than silently
+  falling back to the literal alias (`diffsmith-neq`).
+
 ## v0.1.0 — 2026-05-26
 
 First public release. See `docs/v1-scope.md` for the full v1 contract and
