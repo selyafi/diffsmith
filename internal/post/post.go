@@ -112,7 +112,7 @@ func (p *Poster) Submit(ctx context.Context, target review.ReviewTarget, finding
 
 	var failures []threadFailure
 	for _, f := range findings {
-		if err := addThread(ctx, reviewID, target.HeadSHA, f); err != nil {
+		if err := addThread(ctx, reviewID, f); err != nil {
 			failures = append(failures, threadFailure{finding: f, err: err})
 		}
 	}
@@ -269,9 +269,9 @@ func beginReview(ctx context.Context, prID string) (string, error) {
 	return resp.Data.AddPullRequestReview.PullRequestReview.ID, nil
 }
 
-func addThread(ctx context.Context, reviewID, commitOID string, f review.Finding) error {
+func addThread(ctx context.Context, reviewID string, f review.Finding) error {
 	_, err := graphqlCall(ctx, mutationAddThread, map[string]any{
-		"input": buildAddThreadInput(f, reviewID, commitOID),
+		"input": buildAddThreadInput(f, reviewID),
 	})
 	return err
 }
@@ -448,11 +448,10 @@ func formatGitLabNote(f review.Finding) string {
 // PrintPayload writes the addPullRequestReviewThread input as one JSON
 // document per finding to p.Out — a hermetic preview of what Submit would
 // send. The review ID is a placeholder ("<REVIEW_ID>") because the pending
-// review only exists after a real submit, but the commit OID is the real
-// capture-time HeadSHA so users can verify the anchor.
-func (p *Poster) PrintPayload(target review.ReviewTarget, findings []review.Finding) error {
+// review only exists after a real submit.
+func (p *Poster) PrintPayload(findings []review.Finding) error {
 	for _, f := range findings {
-		input := buildAddThreadInput(f, "<REVIEW_ID>", target.HeadSHA)
+		input := buildAddThreadInput(f, "<REVIEW_ID>")
 		data, err := json.Marshal(input)
 		if err != nil {
 			return fmt.Errorf("marshal thread input for %s:%d: %w", f.File, f.Line, err)

@@ -4,6 +4,17 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.1.3 — 2026-05-26
+
+### Fixed
+
+- Posting a review to GitHub no longer fails with
+  `Variable $input ... was provided invalid value for commitOID (Field is not defined on AddPullRequestReviewThreadInput)`.
+  The `addPullRequestReviewThread` input drops the `commitOID` field —
+  it was never on the schema; the thread anchors to the PR's current
+  HEAD implicitly. `--print-payload` output no longer carries
+  `commitOID` either. (`diffsmith-r7b`)
+
 ## v0.1.2 — 2026-05-26
 
 ### Fixed

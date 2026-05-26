@@ -373,10 +373,9 @@ func TestReviewDefaultPathFiltersBySelections(t *testing.T) {
 // TestReviewPrintPayloadRoutesMarkedFindingsToDryRun verifies that
 // pressing 'p' in the TUI plus passing --print-payload short-circuits the
 // upstream submit and instead writes one GraphQL addThread payload per
-// marked finding to stdout, anchored to the capture-time HeadSHA.
+// marked finding to stdout.
 func TestReviewPrintPayloadRoutesMarkedFindingsToDryRun(t *testing.T) {
 	in := reviewInputWithSessionDiff(t)
-	in.Target.HeadSHA = "abc123headsha"
 	stubProv := &stubProvider{
 		supports:   func(string) bool { return true },
 		fetchInput: in,
@@ -411,13 +410,15 @@ func TestReviewPrintPayloadRoutesMarkedFindingsToDryRun(t *testing.T) {
 
 	got := out.String()
 	for _, want := range []string{
-		"abc123headsha",       // capture-time HeadSHA reaches the payload
 		"pullRequestReviewId", // typed addThreadInput field name
 		"auth/session.go",     // anchored path
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("--print-payload output missing %q.\nFull output:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "commitOID") {
+		t.Errorf("--print-payload must not include commitOID (not a field on AddPullRequestReviewThreadInput).\nFull output:\n%s", got)
 	}
 }
 

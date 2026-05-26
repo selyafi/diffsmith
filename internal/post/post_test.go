@@ -82,10 +82,11 @@ func TestPoster_Submit_OrchestratesFourPhaseGraphQLFlow(t *testing.T) {
 		}
 	}
 
-	// Thread calls must carry the capture-time HeadSHA.
+	// Thread calls must NOT carry a commitOID — GitHub rejects it as
+	// "Field is not defined on AddPullRequestReviewThreadInput".
 	for _, i := range []int{2, 3} {
-		if !strings.Contains((*calls)[i].stdin, target.HeadSHA) {
-			t.Errorf("call %d (addThread) missing HeadSHA %q in stdin", i, target.HeadSHA)
+		if strings.Contains((*calls)[i].stdin, "commitOID") {
+			t.Errorf("call %d (addThread) must not include commitOID in stdin\nSTDIN:\n%s", i, (*calls)[i].stdin)
 		}
 	}
 
@@ -156,18 +157,12 @@ func sliceEqual(a, b []string) bool {
 func TestPoster_PrintPayload_WritesOneAnchoredJSONPerFinding(t *testing.T) {
 	var buf bytes.Buffer
 	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
-	target := review.ReviewTarget{
-		Owner:   "owner",
-		Repo:    "repo",
-		Number:  42,
-		HeadSHA: "a1b2c3d4",
-	}
 	findings := []review.Finding{
 		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T1", SuggestedComment: "C1"},
 		{File: "b.go", Line: 2, Severity: review.SeverityLow, Title: "T2", SuggestedComment: "C2"},
 	}
 
-	if err := p.PrintPayload(target, findings); err != nil {
+	if err := p.PrintPayload(findings); err != nil {
 		t.Fatalf("PrintPayload: %v", err)
 	}
 
@@ -180,14 +175,14 @@ func TestPoster_PrintPayload_WritesOneAnchoredJSONPerFinding(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &got); err != nil {
 			t.Fatalf("line %d not valid JSON: %v\nLINE: %s", i, err, line)
 		}
-		if got.CommitOID != target.HeadSHA {
-			t.Errorf("line %d: CommitOID = %q, want %q (capture-time HeadSHA)", i, got.CommitOID, target.HeadSHA)
-		}
 		if got.Path != findings[i].File {
 			t.Errorf("line %d: Path = %q, want %q", i, got.Path, findings[i].File)
 		}
 		if got.Line != findings[i].Line {
 			t.Errorf("line %d: Line = %d, want %d", i, got.Line, findings[i].Line)
+		}
+		if strings.Contains(line, "commitOID") {
+			t.Errorf("line %d: must not include commitOID (not a field on AddPullRequestReviewThreadInput): %s", i, line)
 		}
 	}
 }
@@ -423,7 +418,7 @@ func TestPoster_PrintPayload_EmptyFindingsWritesNothing(t *testing.T) {
 	var buf bytes.Buffer
 	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 
-	if err := p.PrintPayload(review.ReviewTarget{HeadSHA: "x"}, nil); err != nil {
+	if err := p.PrintPayload(nil); err != nil {
 		t.Fatalf("PrintPayload: %v", err)
 	}
 	if buf.Len() != 0 {

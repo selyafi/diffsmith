@@ -218,7 +218,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		var postErr error
 		switch {
 		case flags.printPayload:
-			postErr = (&post.Poster{Out: cmd.OutOrStdout()}).PrintPayload(input.Target, marked)
+			postErr = (&post.Poster{Out: cmd.OutOrStdout()}).PrintPayload(marked)
 		case confirmPost(cmd, len(marked), input.Target):
 			postErr = submitPost(ctx, cmd.OutOrStdout(), input.Target, marked, flags.repost)
 		}

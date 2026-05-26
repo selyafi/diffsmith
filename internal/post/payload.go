@@ -12,25 +12,28 @@ const diffSideRight diffSide = "RIGHT"
 // addThreadInput is the variables shape for GitHub's
 // addPullRequestReviewThread mutation. JSON tags match the GraphQL input
 // field names exactly so json.Marshal produces a valid payload directly.
+//
+// Per the live AddPullRequestReviewThreadInput schema, only `body` is
+// required; the thread anchors to (path, line) on the PR's current HEAD
+// implicitly. There is no commitOID field — sending one makes the call
+// fail with "Field is not defined on AddPullRequestReviewThreadInput".
 type addThreadInput struct {
 	PullRequestReviewID string   `json:"pullRequestReviewId"`
 	Path                string   `json:"path"`
 	Line                int      `json:"line"`
 	Side                diffSide `json:"side"`
-	CommitOID           string   `json:"commitOID"`
 	Body                string   `json:"body"`
 }
 
 // buildAddThreadInput assembles the GraphQL input for a single inline
 // review thread on (file, line). The body is delegated to formatBody so
 // rendering changes flow through one seam.
-func buildAddThreadInput(f review.Finding, reviewID, commitOID string) addThreadInput {
+func buildAddThreadInput(f review.Finding, reviewID string) addThreadInput {
 	return addThreadInput{
 		PullRequestReviewID: reviewID,
 		Path:                f.File,
 		Line:                f.Line,
 		Side:                diffSideRight,
-		CommitOID:           commitOID,
 		Body:                formatBody(f),
 	}
 }
