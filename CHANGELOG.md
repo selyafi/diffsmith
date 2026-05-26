@@ -4,7 +4,7 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
-## Unreleased
+## v0.1.5 — 2026-05-26
 
 ### Added
 
@@ -51,7 +51,7 @@ Semantic Versioning per the same doc.
   now" line so the rule is not buried thousands of tokens above the
   emission instruction. (`diffsmith-uea`)
 
-### Security
+### Fixed
 
 - Synthesis prompt now instructs the lead model to treat both the diff
   body and all reviewer outputs (including text inside reviewer JSON
@@ -81,9 +81,6 @@ Semantic Versioning per the same doc.
   attacker producing `RawOutput`, and the lead model is instructed to
   ignore any BEGIN/END marker that does not use the exact nonce.
   (`diffsmith-3i6`)
-
-### Fixed
-
 - GitLab MR comment bodies now include the `Evidence` field (as a
   fenced code block, matching the GitHub formatter). Previously
   `formatGitLabNote` rendered only `SuggestedComment` and `FixHint`,
