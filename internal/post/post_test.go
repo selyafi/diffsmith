@@ -95,6 +95,52 @@ func TestPoster_Submit_OrchestratesFourPhaseGraphQLFlow(t *testing.T) {
 	}
 }
 
+func TestPoster_Submit_BeginReview_MustNotSendEventPending(t *testing.T) {
+	// Regression: GitHub's GraphQL schema rejects event=PENDING on
+	// AddPullRequestReviewInput (valid values: COMMENT, APPROVE,
+	// REQUEST_CHANGES, DISMISS). To create a draft review the field
+	// must be omitted entirely; the eventual event is supplied at
+	// submitPullRequestReview time.
+	responses := [][]byte{
+		[]byte(`{"data":{"repository":{"pullRequest":{"id":"PR_kwDOExample"}}}}`),
+		[]byte(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_kwDOExample"}}}}`),
+		[]byte(`{"data":{"addPullRequestReviewThread":{"thread":{}}}}`),
+		[]byte(`{"data":{"submitPullRequestReview":{"pullRequestReview":{"url":"https://github.com/owner/repo/pull/42#pullrequestreview-999"}}}}`),
+	}
+	calls := scriptedGH(t, responses)
+
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf, Repost: true}
+	target := review.ReviewTarget{Owner: "owner", Repo: "repo", Number: 42, HeadSHA: "a1b2c3d4"}
+	findings := []review.Finding{
+		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T1", SuggestedComment: "C1"},
+	}
+
+	if err := p.Submit(context.Background(), target, findings); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	// Call index 1 is beginReview (per TestPoster_Submit_Orchestrates…).
+	beginStdin := (*calls)[1].stdin
+	if strings.Contains(beginStdin, "PENDING") {
+		t.Errorf("beginReview stdin must not contain \"PENDING\"; GitHub rejects event=PENDING\nSTDIN:\n%s", beginStdin)
+	}
+	// Decode the {query, variables} envelope and assert the input map
+	// has no "event" key at all — omission is what GitHub interprets as
+	// "create a draft review".
+	var body struct {
+		Variables struct {
+			Input map[string]any `json:"input"`
+		} `json:"variables"`
+	}
+	if err := json.Unmarshal([]byte(beginStdin), &body); err != nil {
+		t.Fatalf("decode beginReview stdin: %v", err)
+	}
+	if _, present := body.Variables.Input["event"]; present {
+		t.Errorf("beginReview input must omit the \"event\" key; got: %+v", body.Variables.Input)
+	}
+}
+
 func sliceEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

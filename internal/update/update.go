@@ -70,9 +70,16 @@ func Check(ctx context.Context, current string, w io.Writer) {
 }
 
 // isReleaseVersion classifies a version string as one stamped by a
-// real release tag (vX.Y.Z[-suffix]) vs a local development build.
-// Local builds are filtered out so they never get a "newer version
-// available" prompt that would actually be a downgrade.
+// real release tag (X.Y.Z[-suffix], optionally v-prefixed) vs a local
+// development build. Local builds are filtered out so they never get a
+// "newer version available" prompt that would actually be a downgrade.
+//
+// Both prefixed and unprefixed forms are accepted because goreleaser
+// stamps {{ .Version }} (no 'v') in production binaries while local
+// `make build` uses git-describe which keeps the 'v'. The string is
+// normalised to v-prefixed form and validated as semver — anything
+// that isn't a clean semver tag (bare SHAs, git-describe N-gSHA
+// suffixes, garbage) is rejected.
 func isReleaseVersion(v string) bool {
 	if v == "" || v == "dev" {
 		return false
@@ -80,7 +87,10 @@ func isReleaseVersion(v string) bool {
 	if strings.Contains(v, "-dirty") {
 		return false
 	}
-	return strings.HasPrefix(v, "v")
+	if !strings.HasPrefix(v, "v") {
+		v = "v" + v
+	}
+	return semver.IsValid(v)
 }
 
 // compareVersions returns +1 if a > b, -1 if a < b, 0 if equal.

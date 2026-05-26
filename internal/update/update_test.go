@@ -24,6 +24,14 @@ func TestIsReleaseVersion(t *testing.T) {
 		{"v0.1.0-dirty", false},
 		{"f91518a-dirty", false},
 		{"f91518a", false}, // bare SHA from git describe --always (no leading v)
+		// Goreleaser stamps {{ .Version }} (no leading 'v'); these must
+		// be recognised as releases or no released binary will ever
+		// notify users of upgrades. Local make-builds via git describe
+		// keep the 'v' prefix; both forms must round-trip.
+		{"0.1.0", true},
+		{"0.1.1", true},
+		{"0.1.0-rc1", true},
+		{"2.5.0", true},
 	}
 	for _, c := range cases {
 		if got := isReleaseVersion(c.v); got != c.want {
@@ -131,6 +139,23 @@ func TestCheck_NotifiesOnNewerVersion(t *testing.T) {
 	}
 	if !strings.Contains(out, "install.sh") {
 		t.Errorf("notification should include install.sh URL; got: %q", out)
+	}
+}
+
+func TestCheck_NotifiesOnNewerVersion_UnprefixedCurrent(t *testing.T) {
+	// Regression: goreleaser stamps the binary with {{ .Version }} (no
+	// 'v' prefix), so production binaries report e.g. "0.1.1". The
+	// notifier must treat this the same as "v0.1.1" or no released
+	// user ever gets an upgrade prompt.
+	withTestCache(t)
+	httpFetcher = func(_ context.Context) (string, error) {
+		return "v0.2.0", nil
+	}
+	var buf bytes.Buffer
+	Check(context.Background(), "0.1.1", &buf)
+	out := buf.String()
+	if !strings.Contains(out, "v0.2.0 available") {
+		t.Errorf("expected notification mentioning v0.2.0; got: %q", out)
 	}
 }
 

@@ -4,6 +4,24 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.1.2 — 2026-05-26
+
+### Fixed
+
+- Posting a review to GitHub no longer fails with
+  `Variable $input ... was provided invalid value for event (Expected "PENDING" to be one of: COMMENT, APPROVE, REQUEST_CHANGES, DISMISS)`.
+  The `addPullRequestReview` mutation now omits the `event` field
+  entirely, which GitHub interprets as "create a draft review";
+  the eventual event is supplied at submit time. Posting was broken
+  in every prior v0.1.x release. (`diffsmith-16x`)
+- Update notifier now recognises the goreleaser-stamped version
+  format (e.g. `0.1.2` without a leading `v`) so released binaries
+  actually check for upgrades. Previously `isReleaseVersion` required
+  a `v` prefix, so every released binary short-circuited and never
+  hit the GitHub Releases API. Locally-built `make build` binaries
+  (which carry the `v` via `git describe`) were unaffected.
+  (`diffsmith-16x`)
+
 ## v0.1.1 — 2026-05-26
 
 ### Fixed

@@ -239,10 +239,13 @@ func resolvePRID(ctx context.Context, target review.ReviewTarget) (string, error
 }
 
 func beginReview(ctx context.Context, prID string) (string, error) {
+	// Omit "event" from the input: GitHub's PullRequestReviewEvent enum
+	// is {COMMENT, APPROVE, REQUEST_CHANGES, DISMISS} — there is no
+	// PENDING. A missing event creates a draft review, which is exactly
+	// what we want; the real event is supplied later at submit time.
 	out, err := graphqlCall(ctx, mutationBeginReview, map[string]any{
 		"input": map[string]any{
 			"pullRequestId": prID,
-			"event":         "PENDING",
 		},
 	})
 	if err != nil {
