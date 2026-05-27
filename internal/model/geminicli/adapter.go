@@ -13,15 +13,16 @@ import (
 )
 
 // DefaultInputBudgetBytes caps the prompt size sent to gemini. Matches
-// the claudecli budget (256 KB) since both adapters consume the same
-// model.BuildPrompt scaffold and the budget is calibrated per the spike
-// S9 measurements documented in claudecli/adapter.go.
-const DefaultInputBudgetBytes = 256 * 1024
+// the claudecli budget (1 MiB after diffsmith-uc1) so users get
+// consistent behavior regardless of model choice. See codexcli for the
+// underlying rationale.
+const DefaultInputBudgetBytes = 1024 * 1024
 
 // Adapter implements the model.Model interface against the Gemini CLI.
 type Adapter struct {
-	run      provider.Runner
-	lookPath func(name string) (string, error)
+	run         provider.Runner
+	lookPath    func(name string) (string, error)
+	inputBudget int
 }
 
 // New constructs an Adapter. Passing nil uses provider.DefaultRunner;
@@ -32,8 +33,18 @@ func New(run provider.Runner) *Adapter {
 		run = provider.DefaultRunner
 	}
 	return &Adapter{
-		run:      run,
-		lookPath: exec.LookPath,
+		run:         run,
+		lookPath:    exec.LookPath,
+		inputBudget: DefaultInputBudgetBytes,
+	}
+}
+
+// SetInputBudget overrides the default prompt-size cap for this
+// adapter. Values <= 0 are ignored so an unset flag can't silently
+// disable enforcement.
+func (a *Adapter) SetInputBudget(bytes int) {
+	if bytes > 0 {
+		a.inputBudget = bytes
 	}
 }
 
@@ -81,9 +92,9 @@ func (a *Adapter) Synthesize(ctx context.Context, input *review.ReviewInput, res
 // the parsed result. Shared by Review (normal review prompt) and
 // Synthesize (synthesis prompt).
 func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review.ModelReviewResult, error) {
-	if len(prompt) > DefaultInputBudgetBytes {
-		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR or filter files",
-			len(prompt), DefaultInputBudgetBytes, a.Name())
+	if len(prompt) > a.inputBudget {
+		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR, filter files, or raise --input-budget",
+			len(prompt), a.inputBudget, a.Name())
 	}
 
 	out, err := a.run(ctx, strings.NewReader(prompt), "gemini", "-o", "text", "--skip-trust")
@@ -104,6 +115,7 @@ func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review
 // Compile-time interface guards: catch any future refactor that
 // accidentally drops a capability. diffsmith-0hy.
 var (
-	_ model.Reviewer    = (*Adapter)(nil)
-	_ model.Synthesizer = (*Adapter)(nil)
+	_ model.Reviewer          = (*Adapter)(nil)
+	_ model.Synthesizer       = (*Adapter)(nil)
+	_ model.InputBudgetSetter = (*Adapter)(nil)
 )

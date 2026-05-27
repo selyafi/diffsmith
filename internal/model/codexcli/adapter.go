@@ -19,20 +19,25 @@ import (
 //go:embed schema.json
 var schemaJSON []byte
 
-// DefaultInputBudgetBytes caps the prompt size sent to codex. Calibrated
-// by spike S9 against 26 real public PRs (median 7.9 KB, max non-outlier
-// 47.4 KB, one 2.2 MB mega-PR rejected). 256 KB cleanly bisects: every
-// reviewable PR passes with a ~5x safety margin, unreviewable mega-PRs
-// fail with an actionable message. See docs/model-adapters.md § Diff Size
-// and Context Budget for the rationale; spikes/s9-input-budget/main.go is
-// the measurement tool — re-run when models change or the prompt scaffold
-// grows.
-const DefaultInputBudgetBytes = 256 * 1024
+// DefaultInputBudgetBytes caps the prompt size sent to codex. Originally
+// calibrated by spike S9 at 256 KiB against 26 real public PRs; raised
+// to 1 MiB (diffsmith-uc1) so realistic medium PRs — including ones the
+// GitHub files-API fallback (diffsmith-5n4) makes reachable — fit
+// without an explicit --input-budget override. Codex/Claude/Gemini all
+// advertise 200K+ token context windows (~600KB-3MB of text); 1 MiB
+// sits comfortably below the tightest of those while leaving real
+// PRs reviewable. Users can still tighten via --input-budget when
+// hitting quota or quality cliffs. See docs/model-adapters.md § Diff
+// Size and Context Budget for the rationale; spikes/s9-input-budget/
+// main.go is the measurement tool — re-run when models change or the
+// prompt scaffold grows.
+const DefaultInputBudgetBytes = 1024 * 1024
 
 // Adapter implements the model.Model interface against the Codex CLI.
 type Adapter struct {
-	run      provider.Runner
-	lookPath func(name string) (string, error)
+	run         provider.Runner
+	lookPath    func(name string) (string, error)
+	inputBudget int
 }
 
 // New constructs an Adapter. Passing nil uses provider.DefaultRunner;
@@ -43,8 +48,19 @@ func New(run provider.Runner) *Adapter {
 		run = provider.DefaultRunner
 	}
 	return &Adapter{
-		run:      run,
-		lookPath: exec.LookPath,
+		run:         run,
+		lookPath:    exec.LookPath,
+		inputBudget: DefaultInputBudgetBytes,
+	}
+}
+
+// SetInputBudget overrides the default prompt-size cap for this
+// adapter. Values <= 0 are ignored so a missing/zeroed --input-budget
+// flag can't silently disable enforcement and let an arbitrarily
+// large prompt slip through.
+func (a *Adapter) SetInputBudget(bytes int) {
+	if bytes > 0 {
+		a.inputBudget = bytes
 	}
 }
 
@@ -80,9 +96,9 @@ func (a *Adapter) Synthesize(ctx context.Context, input *review.ReviewInput, res
 // the parsed result. Shared by Review (normal review prompt) and
 // Synthesize (synthesis prompt).
 func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review.ModelReviewResult, error) {
-	if len(prompt) > DefaultInputBudgetBytes {
-		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR or filter files",
-			len(prompt), DefaultInputBudgetBytes, a.Name())
+	if len(prompt) > a.inputBudget {
+		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR, filter files, or raise --input-budget",
+			len(prompt), a.inputBudget, a.Name())
 	}
 
 	schemaPath, cleanup, err := writeSchema()
@@ -129,6 +145,7 @@ func writeSchema() (string, func(), error) {
 // Compile-time interface guards: catch any future refactor that
 // accidentally drops a capability. diffsmith-0hy.
 var (
-	_ model.Reviewer    = (*Adapter)(nil)
-	_ model.Synthesizer = (*Adapter)(nil)
+	_ model.Reviewer          = (*Adapter)(nil)
+	_ model.Synthesizer       = (*Adapter)(nil)
+	_ model.InputBudgetSetter = (*Adapter)(nil)
 )

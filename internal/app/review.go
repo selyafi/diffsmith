@@ -54,6 +54,17 @@ func registerPostFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
 	cmd.Flags().BoolVar(&flags.debug, "debug", false, "print each quarantined model finding's (file:line), title, and validator rejection reason after the TUI session ends")
 }
 
+// registerModelFlowFlags adds the flags that govern model invocation
+// on every entry point (review, inbox, bare diffsmith). Like
+// registerPostFlowFlags, the goal is to keep entry-point parity
+// automatic: if --input-budget is registered on one but not the
+// others, the inbox-launched review path would silently ignore the
+// override. Currently this is just --input-budget; future model
+// flags (e.g. --max-files) should join here rather than be inlined.
+func registerModelFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
+	cmd.Flags().IntVar(&flags.inputBudget, "input-budget", 0, "override the per-adapter prompt-size cap in bytes (default: 1 MiB per adapter; 0 keeps the default)")
+}
+
 // renameMapFromFiles extracts the post-image → pre-image rename mapping
 // from the parsed diff. Only renamed-with-hunks files get an entry;
 // same-path files are absent from the map so callers can use it as a
@@ -96,6 +107,11 @@ type reviewFlags struct {
 	// is printed with its (file:line), title, and the validator's
 	// reason. The default-off path stays compact for normal use.
 	debug bool
+	// inputBudget overrides every selected adapter's compiled-in
+	// DefaultInputBudgetBytes. Zero (the cobra default for an unset
+	// int flag) means "leave each adapter's default in place" — see
+	// applyInputBudget for the no-op-on-zero contract.
+	inputBudget int
 }
 
 func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *cobra.Command {
@@ -132,6 +148,7 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "fetch and normalize the diff, then stop before the model call")
 	cmd.Flags().BoolVar(&flags.printPrompt, "print-prompt", false, "print the single-model review prompt and exit without invoking the model")
 	cmd.Flags().BoolVar(&flags.printSynthesisPrompt, "print-synthesis-prompt", false, "print the multi-model synthesis prompt (using stub reviewer outputs) and exit without invoking the model")
+	registerModelFlowFlags(cmd, flags)
 	registerPostFlowFlags(cmd, flags)
 
 	return cmd
@@ -198,6 +215,13 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		fmt.Fprintf(cmd.OutOrStdout(), "fetched %d file(s) from %s (model call skipped: --dry-run)\n", len(input.Files), input.Target.URL)
 		return nil
 	}
+
+	// Apply --input-budget BEFORE Preflight so the override is in place
+	// for any side-effect a future Preflight implementation might have
+	// (and so the runtime invariant — "budget is set before Review" —
+	// is visibly local to one block rather than spread across the
+	// pipeline goroutine).
+	applyInputBudget(selected, flags.inputBudget)
 
 	// Preflight all selected models before launching the TUI so missing
 	// CLIs surface as clean errors rather than flashing the TUI open and

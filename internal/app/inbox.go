@@ -56,6 +56,7 @@ func newInboxCmd(registry *provider.Registry, models map[string]model.Model) *co
 			return runInboxCommandWithSelected(cmd, flags, registry, selected)
 		},
 	}
+	registerModelFlowFlags(cmd, flags)
 	registerPostFlowFlags(cmd, flags)
 	return cmd
 }

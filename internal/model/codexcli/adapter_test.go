@@ -184,8 +184,10 @@ func TestReviewRejectsOversizedPrompt(t *testing.T) {
 	})
 
 	input := sampleInput()
-	// 300 KB of diff body — pushes the prompt past the 256 KB budget.
-	input.RawDiff = strings.Repeat("x", 300*1024)
+	// Push the prompt past the (current) default budget — sized relative
+	// to DefaultInputBudgetBytes so future tunings don't silently turn
+	// this test into a no-op.
+	input.RawDiff = strings.Repeat("x", DefaultInputBudgetBytes+10*1024)
 
 	a := New(run)
 	_, err := a.Review(context.Background(), input)
@@ -346,3 +348,72 @@ func TestAdapter_Synthesize_RunnerError(t *testing.T) {
 		t.Fatal("expected error when codex exec fails")
 	}
 }
+
+// TestSetInputBudget_OverrideTightensCap is the diffsmith-uc1 unit:
+// SetInputBudget(N) must cause prompts larger than N to be rejected
+// even when N is smaller than the default. Without this the
+// --input-budget flag would have no observable effect at the adapter
+// layer.
+func TestSetInputBudget_OverrideTightensCap(t *testing.T) {
+	a := New(nil)
+	a.SetInputBudget(1024) // very tight: a real prompt is always larger
+	// sampleInput's RawDiff alone is tiny but BuildPrompt prepends
+	// scaffold + schema reminders that easily exceed 1 KiB.
+	_, err := a.Review(context.Background(), sampleInput())
+	if err == nil {
+		t.Fatal("Review must reject a prompt larger than the override budget; got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds input budget") {
+		t.Errorf("error should mention the budget; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "1024") {
+		t.Errorf("error should surface the actual budget value (1024) so users can diagnose; got: %v", err)
+	}
+}
+
+// TestSetInputBudget_ZeroIsNoOp defends the default. If the flag is
+// unset (zero value), SetInputBudget(0) must keep the original cap
+// rather than disable enforcement entirely — a budget of 0 would let
+// arbitrarily large prompts through.
+func TestSetInputBudget_ZeroIsNoOp(t *testing.T) {
+	a := New(nil)
+	a.SetInputBudget(0)
+	// A prompt above the (new) default of 1 MiB must still be rejected.
+	input := &review.ReviewInput{
+		Target:  review.ReviewTarget{URL: "https://github.com/test/repo/pull/1"},
+		Files:   []*diff.DiffFile{},
+		RawDiff: string(make([]byte, DefaultInputBudgetBytes+1)),
+	}
+	_, err := a.Review(context.Background(), input)
+	if err == nil {
+		t.Fatal("SetInputBudget(0) must NOT disable budget enforcement; oversized prompt was accepted")
+	}
+	if !strings.Contains(err.Error(), "exceeds input budget") {
+		t.Errorf("rejection should still cite the budget; got: %v", err)
+	}
+}
+
+// TestDefaultInputBudgetBytes_AcceptsMediumPrompts pins the bumped
+// default at 1 MiB: a 700 KiB diff (well above the legacy 256 KiB cap
+// that blocked real PRs) must pass budget enforcement without an
+// override. Asserts behavior, not the constant's value, so the test
+// survives future tuning.
+func TestDefaultInputBudgetBytes_AcceptsMediumPrompts(t *testing.T) {
+	// 700 KiB — below the new default, well above the old one.
+	const promptish = 700 * 1024
+	if DefaultInputBudgetBytes <= promptish {
+		t.Skipf("default budget %d <= test fixture size %d; raise the budget or shrink the fixture",
+			DefaultInputBudgetBytes, promptish)
+	}
+	run, _ := scriptedRunner(t, [][]byte{[]byte(`{"findings":[]}`)})
+	a := New(run)
+	input := &review.ReviewInput{
+		Target:  review.ReviewTarget{URL: "https://github.com/test/repo/pull/1"},
+		Files:   []*diff.DiffFile{},
+		RawDiff: string(make([]byte, promptish)),
+	}
+	if _, err := a.Review(context.Background(), input); err != nil {
+		t.Fatalf("default budget should accept a 700 KiB prompt now; got: %v", err)
+	}
+}
+

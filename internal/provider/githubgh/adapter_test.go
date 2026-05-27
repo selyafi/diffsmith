@@ -245,3 +245,214 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// scriptedResponse pairs a canned stdout payload with an optional error,
+// letting tests script per-call outcomes (e.g. the diff call returning
+// the GitHub 20K-line-cap 406 error before the files-API fallback runs).
+type scriptedResponse struct {
+	out []byte
+	err error
+}
+
+func scriptedRunnerSeq(t *testing.T, responses []scriptedResponse) (provider.Runner, *[]recordedCall) {
+	t.Helper()
+	var calls []recordedCall
+	i := 0
+	run := func(_ context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
+		calls = append(calls, recordedCall{name: name, args: append([]string(nil), args...)})
+		if i >= len(responses) {
+			t.Fatalf("unexpected call #%d: %s %v", i+1, name, args)
+		}
+		r := responses[i]
+		i++
+		return r.out, r.err
+	}
+	return run, &calls
+}
+
+// TestAdapterFetch_FallsBackToFilesAPIOn20KLineCap is the diffsmith-5n4
+// regression. When `gh pr diff` fails with the GitHub server-side 20000-
+// line cap (HTTP 406, "exceeded the maximum number of lines"), the
+// adapter must fall back to `gh api repos/{o}/{r}/pulls/{N}/files
+// --paginate`, reassemble a unified diff from the per-file patches, and
+// return a parsed ReviewInput. Without this, every PR over the cap
+// aborts with an opaque "gh pr diff" error and the user can't review at
+// all (as happened on oddin-gg/lagertha-mono#248).
+func TestAdapterFetch_FallsBackToFilesAPIOn20KLineCap(t *testing.T) {
+	metaJSON := []byte(`{
+		"title": "Big PR",
+		"author": {"login": "alice"},
+		"headRefName": "feat/big",
+		"headRefOid": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"baseRefName": "main",
+		"url": "https://github.com/owner/repo/pull/42"
+	}`)
+	// The exact 406 body gh surfaces when the diff is too large.
+	diffErr := errors.New("gh: exit 1: could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)")
+	filesJSON := []byte(`[
+		{
+			"filename": "a/first.go",
+			"status": "modified",
+			"patch": "@@ -1,3 +1,3 @@\n package a\n \n-var X = 1\n+var X = 2"
+		},
+		{
+			"filename": "b/second.go",
+			"status": "added",
+			"patch": "@@ -0,0 +1,3 @@\n+package b\n+\n+const Y = \"hello\""
+		}
+	]`)
+
+	run, calls := scriptedRunnerSeq(t, []scriptedResponse{
+		{out: metaJSON},
+		{err: diffErr},
+		{out: filesJSON},
+	})
+	a := New(run)
+
+	input, err := a.Fetch(context.Background(), "https://github.com/owner/repo/pull/42")
+	if err != nil {
+		t.Fatalf("Fetch with 20K-cap fallback must succeed; got: %v", err)
+	}
+
+	if len(*calls) != 3 {
+		t.Fatalf("call count: got %d, want 3 (pr view, pr diff, api files)", len(*calls))
+	}
+	apiCall := (*calls)[2]
+	if apiCall.name != "gh" {
+		t.Errorf("fallback should invoke gh, got %q", apiCall.name)
+	}
+	if len(apiCall.args) < 2 || apiCall.args[0] != "api" {
+		t.Errorf("fallback first arg must be 'api'; got %v", apiCall.args)
+	}
+	wantPath := "repos/owner/repo/pulls/42/files"
+	foundPath := false
+	for _, arg := range apiCall.args {
+		if arg == wantPath {
+			foundPath = true
+		}
+	}
+	if !foundPath {
+		t.Errorf("fallback args must include %q; got %v", wantPath, apiCall.args)
+	}
+	if !contains(apiCall.args, "--paginate") {
+		t.Errorf("fallback must paginate to handle large PRs; got %v", apiCall.args)
+	}
+
+	if len(input.Files) != 2 {
+		t.Fatalf("want 2 files reassembled, got %d", len(input.Files))
+	}
+	if input.Files[0].Path != "a/first.go" {
+		t.Errorf("file 0 path: got %q, want a/first.go", input.Files[0].Path)
+	}
+	if input.Files[1].Path != "b/second.go" {
+		t.Errorf("file 1 path: got %q, want b/second.go", input.Files[1].Path)
+	}
+	if input.Target.HeadSHA != "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2" {
+		t.Errorf("HeadSHA lost across fallback: got %q", input.Target.HeadSHA)
+	}
+}
+
+// TestAdapterFetch_FallbackPropagatesNon406DiffErrors confirms we don't
+// over-trigger: a generic `gh pr diff` error (auth, network, missing PR)
+// must surface unchanged, not silently fall back to the files API.
+func TestAdapterFetch_FallbackPropagatesNon406DiffErrors(t *testing.T) {
+	metaJSON := []byte(`{"title":"X","author":{"login":"a"},"headRefName":"h","headRefOid":"deadbeef","baseRefName":"main","url":"u"}`)
+	run, _ := scriptedRunnerSeq(t, []scriptedResponse{
+		{out: metaJSON},
+		{err: errors.New("gh: exit 4: not authenticated")},
+	})
+	a := New(run)
+
+	_, err := a.Fetch(context.Background(), "https://github.com/owner/repo/pull/42")
+	if err == nil {
+		t.Fatal("non-406 errors must surface, not trigger fallback")
+	}
+	if !strings.Contains(err.Error(), "not authenticated") {
+		t.Errorf("error should preserve the underlying cause; got %v", err)
+	}
+}
+
+// TestAdapterFetch_FallbackReassemblesRenamesAndDeletes confirms the
+// reassembled diff captures the file-kind signals the classifier looks
+// for: a renamed file must round-trip through diff.Parse with its old
+// path preserved on OldPath, and a removed file must classify as
+// FileDelete (not FileText). Without this, post-fallback the post
+// flow's rename-aware position would lose the old_path mapping and
+// inline comments would land on /dev/null.
+func TestAdapterFetch_FallbackReassemblesRenamesAndDeletes(t *testing.T) {
+	metaJSON := []byte(`{"title":"X","author":{"login":"a"},"headRefName":"h","headRefOid":"deadbeef","baseRefName":"main","url":"u"}`)
+	diffErr := errors.New("gh: exit 1: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)")
+	filesJSON := []byte(`[
+		{
+			"filename": "newname.go",
+			"previous_filename": "oldname.go",
+			"status": "renamed",
+			"patch": "@@ -1,1 +1,1 @@\n-old\n+new"
+		},
+		{
+			"filename": "gone.go",
+			"status": "removed",
+			"patch": "@@ -1,1 +0,0 @@\n-bye"
+		}
+	]`)
+	run, _ := scriptedRunnerSeq(t, []scriptedResponse{
+		{out: metaJSON},
+		{err: diffErr},
+		{out: filesJSON},
+	})
+	a := New(run)
+
+	input, err := a.Fetch(context.Background(), "https://github.com/owner/repo/pull/42")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(input.Files) != 2 {
+		t.Fatalf("want 2 files, got %d", len(input.Files))
+	}
+	// Renamed entry must keep its old path so the rename-aware GitLab
+	// poster can route inline comments via old_path.
+	if input.Files[0].Path != "newname.go" || input.Files[0].OldPath != "oldname.go" {
+		t.Errorf("rename: got Path=%q OldPath=%q; want newname.go / oldname.go",
+			input.Files[0].Path, input.Files[0].OldPath)
+	}
+	// Removed entry must be classified by the parser as a delete via
+	// the `deleted file mode` extended header we emit.
+	if input.Files[1].Path != "/dev/null" {
+		t.Errorf("removed: Path should be /dev/null after parser normalization; got %q", input.Files[1].Path)
+	}
+	if input.Files[1].OldPath != "gone.go" {
+		t.Errorf("removed: OldPath should preserve original name; got %q", input.Files[1].OldPath)
+	}
+}
+
+// TestAdapterFetch_FallbackSkipsNullPatchFiles covers GitHub's per-file
+// ~3MB patch cap: when a file's `patch` field is null, we skip that file
+// (warning, not error) and continue with the rest. Failing the whole
+// review because one file is too big would be a worse UX than reviewing
+// the other files without it.
+func TestAdapterFetch_FallbackSkipsNullPatchFiles(t *testing.T) {
+	metaJSON := []byte(`{"title":"X","author":{"login":"a"},"headRefName":"h","headRefOid":"deadbeef","baseRefName":"main","url":"u"}`)
+	diffErr := errors.New("gh: exit 1: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)")
+	// One reviewable file, one too-large file (patch:null).
+	filesJSON := []byte(`[
+		{"filename":"small.go","status":"modified","patch":"@@ -1,1 +1,1 @@\n-old\n+new"},
+		{"filename":"huge.go","status":"modified","patch":null}
+	]`)
+	run, _ := scriptedRunnerSeq(t, []scriptedResponse{
+		{out: metaJSON},
+		{err: diffErr},
+		{out: filesJSON},
+	})
+	a := New(run)
+
+	input, err := a.Fetch(context.Background(), "https://github.com/owner/repo/pull/42")
+	if err != nil {
+		t.Fatalf("null-patch entries must be skipped, not fatal; got %v", err)
+	}
+	if len(input.Files) != 1 {
+		t.Fatalf("want 1 file (huge.go skipped), got %d", len(input.Files))
+	}
+	if input.Files[0].Path != "small.go" {
+		t.Errorf("kept file path: got %q, want small.go", input.Files[0].Path)
+	}
+}

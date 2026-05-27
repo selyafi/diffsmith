@@ -53,3 +53,17 @@ type Synthesizer interface {
 // the explicit capability names (Reviewer for the base, Synthesizer
 // for the optional synthesis path).
 type Model = Reviewer
+
+// InputBudgetSetter is an optional capability for adapters that cap the
+// prompt size sent to their backing CLI. The app layer type-asserts to
+// this interface and applies a user-supplied --input-budget value
+// before Review runs. Adapters that don't enforce a budget (e.g.
+// antigravity, which never invokes a CLI in v1) don't implement it and
+// are skipped silently by the override loop.
+//
+// Implementations must treat n <= 0 as a no-op so a missing/zeroed flag
+// can't accidentally turn the budget off and let an arbitrarily large
+// prompt through.
+type InputBudgetSetter interface {
+	SetInputBudget(bytes int)
+}

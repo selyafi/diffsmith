@@ -82,6 +82,7 @@ func newRootCmd() *cobra.Command {
 			update.Check(ctx, version, cmd.ErrOrStderr())
 		},
 	}
+	registerModelFlowFlags(root, rootFlags)
 	registerPostFlowFlags(root, rootFlags)
 	root.AddCommand(newReviewCmd(registry, models))
 	root.AddCommand(newInboxCmd(registry, models))

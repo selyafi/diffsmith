@@ -14,20 +14,19 @@ import (
 	"github.com/selyafi/diffsmith/internal/review"
 )
 
-// DefaultInputBudgetBytes caps the prompt size sent to Claude. Calibrated
-// by spike S9 against 26 real public PRs (median 7.9 KB, max non-outlier
-// 47.4 KB, one 2.2 MB mega-PR rejected). 256 KB cleanly bisects: every
-// reviewable PR passes with a ~5x safety margin, unreviewable mega-PRs
-// fail with an actionable message. See docs/model-adapters.md § Diff Size
-// and Context Budget for the rationale; spikes/s9-input-budget/main.go is
-// the measurement tool — re-run when models change or the prompt scaffold
-// grows.
-const DefaultInputBudgetBytes = 256 * 1024
+// DefaultInputBudgetBytes caps the prompt size sent to Claude. Originally
+// calibrated by spike S9 at 256 KiB; raised to 1 MiB (diffsmith-uc1).
+// See codexcli.DefaultInputBudgetBytes for the rationale — Claude shares
+// the same envelope and the bump is intentionally uniform across all
+// three adapters so users get consistent behavior regardless of which
+// model they pick.
+const DefaultInputBudgetBytes = 1024 * 1024
 
 // Adapter implements the model.Model interface against the Claude CLI.
 type Adapter struct {
-	run      provider.Runner
-	lookPath func(name string) (string, error)
+	run         provider.Runner
+	lookPath    func(name string) (string, error)
+	inputBudget int
 }
 
 // New constructs an Adapter. Passing nil uses provider.DefaultRunner;
@@ -38,8 +37,18 @@ func New(run provider.Runner) *Adapter {
 		run = provider.DefaultRunner
 	}
 	return &Adapter{
-		run:      run,
-		lookPath: exec.LookPath,
+		run:         run,
+		lookPath:    exec.LookPath,
+		inputBudget: DefaultInputBudgetBytes,
+	}
+}
+
+// SetInputBudget overrides the default prompt-size cap for this
+// adapter. Values <= 0 are ignored so an unset flag can't silently
+// disable enforcement.
+func (a *Adapter) SetInputBudget(bytes int) {
+	if bytes > 0 {
+		a.inputBudget = bytes
 	}
 }
 
@@ -81,9 +90,9 @@ func (a *Adapter) Synthesize(ctx context.Context, input *review.ReviewInput, res
 // the parsed result. Shared by Review (normal review prompt) and
 // Synthesize (synthesis prompt).
 func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review.ModelReviewResult, error) {
-	if len(prompt) > DefaultInputBudgetBytes {
-		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR or filter files",
-			len(prompt), DefaultInputBudgetBytes, a.Name())
+	if len(prompt) > a.inputBudget {
+		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR, filter files, or raise --input-budget",
+			len(prompt), a.inputBudget, a.Name())
 	}
 
 	out, err := a.run(ctx, strings.NewReader(prompt), "claude", "--print", "--output-format=text")
@@ -104,6 +113,7 @@ func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review
 // Compile-time interface guards: catch any future refactor that
 // accidentally drops a capability. diffsmith-0hy.
 var (
-	_ model.Reviewer    = (*Adapter)(nil)
-	_ model.Synthesizer = (*Adapter)(nil)
+	_ model.Reviewer          = (*Adapter)(nil)
+	_ model.Synthesizer       = (*Adapter)(nil)
+	_ model.InputBudgetSetter = (*Adapter)(nil)
 )

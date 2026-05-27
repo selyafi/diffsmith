@@ -4,6 +4,40 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## Unreleased
+
+### Added
+
+- `--input-budget <bytes>` flag overrides the per-adapter prompt-size
+  cap on every entry point (`review`, `inbox`, bare `diffsmith`).
+  Zero (the default) keeps each adapter's compiled-in budget. Routes
+  through `model.InputBudgetSetter`, which all three working adapters
+  (codex, claude, gemini) implement. (`diffsmith-uc1`)
+
+### Changed
+
+- Default `DefaultInputBudgetBytes` raised from 256 KiB to 1 MiB on
+  codex, claude, and gemini adapters. The original 256 KiB cap was
+  calibrated by spike S9 long before the GitHub files-API fetch
+  fallback (`diffsmith-5n4`) made larger PRs reachable; 1 MiB sits
+  well below every working adapter's advertised context window while
+  unblocking realistic medium PRs without a flag override.
+  (`diffsmith-uc1`)
+- Budget-exceeded error message now points users at the new
+  `--input-budget` flag in addition to "review a smaller PR or filter
+  files". (`diffsmith-uc1`)
+
+### Fixed
+
+- GitHub adapter now falls back to the pull-request files API
+  (`gh api repos/{o}/{r}/pulls/{N}/files --paginate`) when
+  `gh pr diff` hits the GitHub 20,000-line server-side cap and
+  returns HTTP 406. Per-file patches are reassembled into a
+  synthetic unified diff covering modified, added, removed,
+  renamed, and copied files. Files whose `patch` field is null
+  (per-file ~3MB cap) are announced on stderr and skipped rather
+  than aborting the review. (`diffsmith-5n4`)
+
 ## v0.1.6 — 2026-05-27
 
 ### Security
