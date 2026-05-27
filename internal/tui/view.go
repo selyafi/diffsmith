@@ -155,7 +155,7 @@ func (m *Model) renderFindingsPane() string {
 		if stateTag != "" {
 			line2 += "  " + stateTag
 		}
-		if m.markedForPost[i] {
+		if m.IsPostBoundRow(i) {
 			line2 += "  " + labelStyle.Render("[post]")
 		}
 
@@ -233,7 +233,7 @@ func (m *Model) renderFooter() string {
 		return footerStyle.Render(m.transientStatus)
 	}
 	return footerStyle.Render(
-		"↑↓ navigate  |  e edit  |  a approve  |  d dismiss  |  c copy  |  p mark-post  |  q back",
+		"↑↓ navigate  |  e edit  |  a approve  |  d dismiss  |  c copy  |  p post (after a)  |  q back",
 	)
 }
 

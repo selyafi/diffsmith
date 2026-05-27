@@ -34,6 +34,17 @@ type Poster struct {
 	// MR/PR. Use this for the explicit "I know there are duplicates and
 	// I want them anyway" path; the default behavior is to skip.
 	Repost bool
+	// OldPaths maps a finding's post-image path to the pre-rename path
+	// produced by the diff parser. Used by submitGitLab to populate
+	// position.old_path on inline discussions for renamed-with-hunks
+	// files; same-path files don't need an entry. Ignored by the
+	// GitHub path (GitHub's addPullRequestReviewThread anchors on the
+	// post-image path alone).
+	//
+	// Kept on Poster (not on each Finding) so the model JSON schema
+	// stays post-image-path only and the app layer can populate this
+	// once from the parsed diff before calling Submit.
+	OldPaths map[string]string
 }
 
 const queryResolvePRID = `query($owner:String!,$repo:String!,$number:Int!){
@@ -360,6 +371,16 @@ func (p *Poster) submitGitLab(ctx context.Context, target review.ReviewTarget, f
 
 	var failures []threadFailure
 	for _, f := range findings {
+		// Same-path files: old_path = new_path. Renamed-with-hunks
+		// files: old_path comes from the parser-derived OldPaths map.
+		// GitLab rejects inline threads when (old_path, new_path) does
+		// not describe the actual rename in the MR's diff, so this
+		// distinction matters even though the model only ever speaks
+		// in post-image paths.
+		oldPath := f.File
+		if mapped, ok := p.OldPaths[f.File]; ok && mapped != "" {
+			oldPath = mapped
+		}
 		reqBody, err := json.Marshal(map[string]any{
 			"body": formatGitLabNote(f),
 			"position": map[string]any{
@@ -368,7 +389,7 @@ func (p *Poster) submitGitLab(ctx context.Context, target review.ReviewTarget, f
 				"start_sha":     target.StartSHA,
 				"position_type": "text",
 				"new_path":      f.File,
-				"old_path":      f.File,
+				"old_path":      oldPath,
 				"new_line":      f.Line,
 			},
 		})
@@ -432,17 +453,26 @@ func (p *Poster) applyDedup(
 
 // formatGitLabNote renders a finding into a GitLab Markdown body.
 // The inline thread is already anchored at file:line via the position
-// fields, so the body leads with severity/model/confidence metadata,
-// then the suggested comment, then evidence (when present, as a
-// fenced code block matching formatBody), then the fix hint.
+// fields, so the visible body leads with a compact severity line and
+// confidence, then the suggested comment, then evidence (when
+// present, as a fenced code block matching formatBody), then the fix
+// hint.
+//
+// The leading diffsmithMarker is an HTML comment, stripped by
+// GitLab's Markdown renderer; it is the dedup recogniser
+// fetchExistingGitLabKeys looks for. Model name + the explicit
+// "diffsmith review" header are intentionally NOT shown — they
+// duplicate information the reader can derive from the diffsmith
+// run's stdout summary, and visual noise per-comment is more
+// annoying than useful.
 //
 // Evidence is included to match the GitHub formatter (formatBody);
 // dropping it on GitLab caused asymmetric loss of supporting context
 // for the same finding posted across providers.
 func formatGitLabNote(f review.Finding) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "**diffsmith review** — %s, model: %s, confidence: %.0f%%\n\n",
-		f.Severity, f.Model, f.Confidence*100)
+	fmt.Fprintf(&b, "%s -->\n", diffsmithMarker)
+	fmt.Fprintf(&b, "**%s** (%.0f%%)\n\n", f.Severity, f.Confidence*100)
 	b.WriteString(f.SuggestedComment)
 	if f.Evidence != "" {
 		fmt.Fprintf(&b, "\n\nEvidence:\n```\n%s\n```", f.Evidence)
@@ -453,11 +483,24 @@ func formatGitLabNote(f review.Finding) string {
 	return b.String()
 }
 
-// PrintPayload writes the addPullRequestReviewThread input as one JSON
-// document per finding to p.Out — a hermetic preview of what Submit would
-// send. The review ID is a placeholder ("<REVIEW_ID>") because the pending
-// review only exists after a real submit.
-func (p *Poster) PrintPayload(findings []review.Finding) error {
+// PrintPayload writes one JSON document per finding to p.Out — a
+// hermetic preview of what Submit would send. The payload shape is
+// host-specific: GitHub gets the addPullRequestReviewThread input
+// (review ID is a placeholder "<REVIEW_ID>" because the pending review
+// only exists after a real submit); GitLab gets the discussions API
+// body, with the same position fields submitGitLab would marshal.
+//
+// Routing on target.Host matters: the two shapes are incompatible, so
+// printing the wrong one would mislead a user who copies the preview
+// into a separate gh/glab invocation.
+func (p *Poster) PrintPayload(target review.ReviewTarget, findings []review.Finding) error {
+	if target.Host == review.HostGitLab {
+		return p.printGitLabPayload(target, findings)
+	}
+	return p.printGitHubPayload(findings)
+}
+
+func (p *Poster) printGitHubPayload(findings []review.Finding) error {
 	for _, f := range findings {
 		input := buildAddThreadInput(f, "<REVIEW_ID>")
 		data, err := json.Marshal(input)
@@ -465,6 +508,46 @@ func (p *Poster) PrintPayload(findings []review.Finding) error {
 			return fmt.Errorf("marshal thread input for %s:%d: %w", f.File, f.Line, err)
 		}
 		if _, err := fmt.Fprintln(p.Out, string(data)); err != nil {
+			return fmt.Errorf("write payload: %w", err)
+		}
+	}
+	return nil
+}
+
+// printGitLabPayload mirrors submitGitLab's body shape so the preview is
+// byte-equivalent to what would have been sent. Same OldPaths lookup;
+// same position fields. Crucially, it also mirrors submitGitLab's
+// SHA-presence guard: if any of (base, head, start) is empty, this
+// errors out instead of substituting placeholders. Otherwise a user
+// running --print-payload against a target with missing diff-refs
+// would see a clean-looking JSON and conclude posting would work,
+// when in fact submitGitLab would reject the same target at line 354.
+func (p *Poster) printGitLabPayload(target review.ReviewTarget, findings []review.Finding) error {
+	if target.BaseSHA == "" || target.HeadSHA == "" || target.StartSHA == "" {
+		return fmt.Errorf("gitlab: missing diff-refs (base=%q head=%q start=%q); cannot preview inline-thread payload",
+			target.BaseSHA, target.HeadSHA, target.StartSHA)
+	}
+	for _, f := range findings {
+		oldPath := f.File
+		if mapped, ok := p.OldPaths[f.File]; ok && mapped != "" {
+			oldPath = mapped
+		}
+		body, err := json.Marshal(map[string]any{
+			"body": formatGitLabNote(f),
+			"position": map[string]any{
+				"base_sha":      target.BaseSHA,
+				"head_sha":      target.HeadSHA,
+				"start_sha":     target.StartSHA,
+				"position_type": "text",
+				"new_path":      f.File,
+				"old_path":      oldPath,
+				"new_line":      f.Line,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("marshal gitlab discussion body for %s:%d: %w", f.File, f.Line, err)
+		}
+		if _, err := fmt.Fprintln(p.Out, string(body)); err != nil {
 			return fmt.Errorf("write payload: %w", err)
 		}
 	}

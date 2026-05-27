@@ -9,13 +9,19 @@ import (
 	"github.com/selyafi/diffsmith/internal/review"
 )
 
-// Adapter implements model.Model against the Antigravity CLI (`agy`).
+// Adapter implements model.Reviewer against the Antigravity CLI (`agy`).
 //
 // Per spike S8b (see doc.go) the adapter is a Preflight stub in v1: the
 // `agy` CLI cannot authenticate non-interactively, so Review never reaches
 // the runner. The struct still exposes the constructor signature shared
 // by the other adapters so it can sit in defaultModels() and surface an
 // actionable error when a user picks `--model antigravity`.
+//
+// Unlike the codex/claude/gemini adapters, this one does NOT implement
+// model.Synthesizer: there is no real CLI invocation to delegate to in
+// v1, and a stub Synthesize would only mask the missing capability.
+// The synthesis call site type-asserts model.Synthesizer and skips
+// lead candidates that don't satisfy it.
 type Adapter struct {
 	lookPath func(name string) (string, error)
 }
@@ -38,16 +44,6 @@ func (a *Adapter) Preflight(_ context.Context) error {
 		return errors.New("agy (Antigravity CLI) not found on PATH. The antigravity adapter is experimental in v1; install agy or select --model codex or --model claude")
 	}
 	return errors.New("antigravity adapter is experimental in v1: agy requires interactive browser OAuth on every invocation with no persistent-token path, so it cannot run as a non-interactive review backend. Select --model codex or --model claude")
-}
-
-// Synthesize is unavailable for the same reason Review is: agy has no
-// non-interactive auth path in v1 (spike S8b). Surface Preflight's
-// experimental-gate error directly. When agy gains a non-interactive
-// auth path the whole body must be rewritten with a real synthesis
-// call — there is no fallback here, since a silent fallback would
-// mask the missing implementation.
-func (a *Adapter) Synthesize(ctx context.Context, input *review.ReviewInput, results []*review.ModelReviewResult) (*review.ModelReviewResult, error) {
-	return nil, a.Preflight(ctx)
 }
 
 // Review delegates to Preflight in v1. The runner is never invoked.

@@ -46,7 +46,10 @@ func newRootCmd() *cobra.Command {
 		Short: "Local, human-in-the-loop AI review cockpit for GitHub PRs and GitLab MRs",
 		Long: "Diffsmith fetches a pull or merge request diff, asks a selected AI CLI to draft\n" +
 			"review findings, validates them against the diff, and opens a terminal UI where\n" +
-			"you inspect, edit, approve, dismiss, and copy comments. Diffsmith never posts.\n\n" +
+			"you inspect, edit, approve, dismiss, and copy comments. Approved findings can\n" +
+			"optionally be posted upstream as inline review comments; posting is opt-in,\n" +
+			"requires you to press 'p' on an approved finding, and never runs without an\n" +
+			"explicit confirmation prompt.\n\n" +
 			"Run without arguments inside a git repo to enter the inbox.",
 		Version:       version,
 		SilenceUsage:  true,

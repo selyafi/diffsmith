@@ -11,10 +11,18 @@ import (
 	"github.com/selyafi/diffsmith/internal/review"
 )
 
-// diffsmithSignature is the leading marker every posted thread body
-// starts with. We use it to distinguish diffsmith-authored threads from
-// human reviewer notes when scanning existing threads on the MR/PR.
-const diffsmithSignature = "**diffsmith review**"
+// diffsmithMarker is the invisible HTML-comment sentinel every posted
+// thread body carries so dedup can recognise diffsmith-authored
+// threads without polluting the visible body. Both GitHub and GitLab
+// strip HTML comments at render time, so this is invisible to readers
+// (matches the convention used by Dependabot, renovate, semantic-
+// release, etc.).
+//
+// The matcher uses strings.Contains (not HasPrefix) so the marker can
+// sit anywhere in the body — leading is conventional but not required
+// by the contract. Versioning could later be encoded as
+// `<!-- diffsmith:v2 -->` while keeping the prefix as the match key.
+const diffsmithMarker = "<!-- diffsmith"
 
 // dedupKey returns the position-based key used to match a new finding
 // against an existing diffsmith thread on the same line. The key is
@@ -62,7 +70,7 @@ func fetchExistingGitLabKeys(ctx context.Context, run provider.Runner, target re
 	keys := make(map[string]bool)
 	for _, d := range discussions {
 		for _, n := range d.Notes {
-			if !strings.HasPrefix(strings.TrimSpace(n.Body), diffsmithSignature) {
+			if !strings.Contains(n.Body, diffsmithMarker) {
 				continue
 			}
 			if n.Position == nil || n.Position.NewPath == "" || n.Position.NewLine == 0 {
@@ -97,7 +105,7 @@ func fetchExistingGitHubKeys(ctx context.Context, run provider.Runner, target re
 	}
 	keys := make(map[string]bool)
 	for _, c := range comments {
-		if !strings.HasPrefix(strings.TrimSpace(c.Body), diffsmithSignature) {
+		if !strings.Contains(c.Body, diffsmithMarker) {
 			continue
 		}
 		if c.Path == "" || c.Line == 0 {

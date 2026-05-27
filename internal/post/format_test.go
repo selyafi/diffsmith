@@ -7,6 +7,25 @@ import (
 	"github.com/selyafi/diffsmith/internal/review"
 )
 
+// TestFormatBody_CarriesDiffsmithMarker is the load-bearing assertion
+// for GitHub dedup: fetchExistingGitHubKeys recognises a posted
+// comment as diffsmith-authored by Contains-matching the
+// diffsmithMarker (an HTML comment that the renderer strips). If
+// formatBody ever stops emitting the marker, dedup silently re-posts
+// every finding on every run.
+func TestFormatBody_CarriesDiffsmithMarker(t *testing.T) {
+	f := review.Finding{
+		Severity:         review.SeverityMedium,
+		Title:            "Sample",
+		SuggestedComment: "Comment.",
+	}
+	got := formatBody(f)
+	if !strings.Contains(got, diffsmithMarker) {
+		t.Errorf("formatBody must contain %q so GitHub dedup can recognise its own comments\nGOT:\n%s",
+			diffsmithMarker, got)
+	}
+}
+
 func TestFormatBody_OmitsEmptyOptionalSections(t *testing.T) {
 	f := review.Finding{
 		Severity:         review.SeverityLow,
@@ -102,19 +121,23 @@ func TestFormatGitLabNote_ComposesAllFindingFields(t *testing.T) {
 	got := formatGitLabNote(f)
 
 	wantSubstrings := []string{
-		"medium",
-		"claude",
-		"Pre-allocate buf",
-		// Evidence section + content must both render.
-		"Evidence:",
-		"for _, x := range items",
-		// Fix hint must still render with its existing prefix style.
-		"Fix hint:",
-		"make([]byte, 0, expectedSize)",
+		"medium",                                 // severity rendered
+		"80%",                                    // confidence rendered
+		"Pre-allocate buf",                       // suggested comment
+		"Evidence:", "for _, x := range items",   // evidence section + content
+		"Fix hint:", "make([]byte, 0, expectedSize)", // fix hint preserved
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
 			t.Errorf("formatGitLabNote output missing %q\nGOT:\n%s", want, got)
 		}
+	}
+	// The compact body no longer surfaces the model name on every
+	// comment (per the post-dvz code-review follow-up): the per-run
+	// stdout summary already names the model. If model name reappears
+	// in the GitLab note, the user gets repetitive noise on every
+	// finding.
+	if strings.Contains(got, "claude") {
+		t.Errorf("formatGitLabNote must not include the model name in the per-comment body; got:\n%s", got)
 	}
 }

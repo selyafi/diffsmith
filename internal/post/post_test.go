@@ -157,12 +157,13 @@ func sliceEqual(a, b []string) bool {
 func TestPoster_PrintPayload_WritesOneAnchoredJSONPerFinding(t *testing.T) {
 	var buf bytes.Buffer
 	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
+	target := review.ReviewTarget{Host: review.HostGitHub, Owner: "o", Repo: "r", Number: 1, HeadSHA: "sha"}
 	findings := []review.Finding{
 		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T1", SuggestedComment: "C1"},
 		{File: "b.go", Line: 2, Severity: review.SeverityLow, Title: "T2", SuggestedComment: "C2"},
 	}
 
-	if err := p.PrintPayload(findings); err != nil {
+	if err := p.PrintPayload(target, findings); err != nil {
 		t.Fatalf("PrintPayload: %v", err)
 	}
 
@@ -418,11 +419,136 @@ func TestPoster_PrintPayload_EmptyFindingsWritesNothing(t *testing.T) {
 	var buf bytes.Buffer
 	p := &Poster{Out: &buf, Repost: true} // bypass dedup; this test isn't about dedup
 
-	if err := p.PrintPayload(nil); err != nil {
+	if err := p.PrintPayload(review.ReviewTarget{Host: review.HostGitHub}, nil); err != nil {
 		t.Fatalf("PrintPayload: %v", err)
 	}
 	if buf.Len() != 0 {
 		t.Errorf("empty findings produced output: %q", buf.String())
+	}
+}
+
+// TestPoster_PrintPayload_GitLabEmitsDiscussionsPositionShape is the
+// regression for diffsmith-dvz.5. On a GitLab review target,
+// --print-payload must preview the GitLab discussions API JSON body
+// (with position fields), NOT the GitHub addPullRequestReviewThread
+// input. The two payload shapes are incompatible: a user who copies
+// the GitHub payload and feeds it to glab will get a confusing 4xx,
+// not an obvious failure.
+func TestPoster_PrintPayload_GitLabEmitsDiscussionsPositionShape(t *testing.T) {
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf, Repost: true}
+	target := review.ReviewTarget{
+		Host:     review.HostGitLab,
+		Owner:    "g",
+		Repo:     "p",
+		Number:   3650,
+		HeadSHA:  "head123",
+		BaseSHA:  "base456",
+		StartSHA: "start789",
+	}
+	findings := []review.Finding{
+		{File: "a.go", Line: 11, Severity: review.SeverityHigh, SuggestedComment: "C1"},
+	}
+
+	if err := p.PrintPayload(target, findings); err != nil {
+		t.Fatalf("PrintPayload: %v", err)
+	}
+	line := strings.TrimSpace(buf.String())
+	if line == "" {
+		t.Fatalf("PrintPayload produced no output")
+	}
+	// Must NOT be the GitHub GraphQL addThreadInput shape.
+	if strings.Contains(line, `"pullRequestReviewId"`) {
+		t.Errorf("GitLab preview must not include GitHub-only field pullRequestReviewId\nLINE: %s", line)
+	}
+	// Must be the GitLab discussions body shape with nested position.
+	var parsed struct {
+		Body     string `json:"body"`
+		Position struct {
+			BaseSHA      string `json:"base_sha"`
+			HeadSHA      string `json:"head_sha"`
+			StartSHA     string `json:"start_sha"`
+			PositionType string `json:"position_type"`
+			NewPath      string `json:"new_path"`
+			OldPath      string `json:"old_path"`
+			NewLine      int    `json:"new_line"`
+		} `json:"position"`
+	}
+	if err := json.Unmarshal([]byte(line), &parsed); err != nil {
+		t.Fatalf("GitLab preview not valid JSON: %v\nLINE: %s", err, line)
+	}
+	if parsed.Position.BaseSHA != "base456" || parsed.Position.HeadSHA != "head123" || parsed.Position.StartSHA != "start789" {
+		t.Errorf("position SHAs = (%q, %q, %q), want (base456, head123, start789)",
+			parsed.Position.BaseSHA, parsed.Position.HeadSHA, parsed.Position.StartSHA)
+	}
+	if parsed.Position.NewPath != "a.go" || parsed.Position.OldPath != "a.go" {
+		t.Errorf("paths = (%q, %q), want (a.go, a.go) for unchanged-path file", parsed.Position.NewPath, parsed.Position.OldPath)
+	}
+	if parsed.Position.NewLine != 11 {
+		t.Errorf("new_line = %d, want 11", parsed.Position.NewLine)
+	}
+}
+
+// TestPoster_PrintPayload_GitLabRequiresDiffRefs is the follow-up to
+// dvz.5's code review: printGitLabPayload must mirror submitGitLab's
+// SHA-presence guard. Substituting placeholders for missing SHAs lets
+// the preview claim success when a real Submit would error at the
+// guard, misleading anyone using --print-payload as a hermetic check.
+func TestPoster_PrintPayload_GitLabRequiresDiffRefs(t *testing.T) {
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf, Repost: true}
+	target := review.ReviewTarget{
+		Host: review.HostGitLab, Owner: "g", Repo: "p", Number: 1,
+		// All SHAs empty — same shape that submitGitLab rejects.
+	}
+	findings := []review.Finding{{File: "a.go", Line: 1, SuggestedComment: "c"}}
+
+	err := p.PrintPayload(target, findings)
+	if err == nil {
+		t.Fatal("expected error on missing diff-refs; got nil — preview must not succeed where Submit would fail")
+	}
+	if !strings.Contains(err.Error(), "missing diff-refs") {
+		t.Errorf("error must name the missing-diff-refs failure mode for parity with submitGitLab; got %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("no payload should be written when refs are missing; got: %q", buf.String())
+	}
+}
+
+// TestPoster_PrintPayload_GitLabUsesOldPathForRenamedFiles confirms the
+// preview honors the same OldPaths map submitGitLab uses, so the user
+// can verify renamed-file payloads via --print-payload before sending.
+func TestPoster_PrintPayload_GitLabUsesOldPathForRenamedFiles(t *testing.T) {
+	var buf bytes.Buffer
+	p := &Poster{
+		Out:    &buf,
+		Repost: true,
+		OldPaths: map[string]string{
+			"internal/store/renamed.go": "internal/store/old_name.go",
+		},
+	}
+	target := review.ReviewTarget{
+		Host: review.HostGitLab, Owner: "g", Repo: "p", Number: 1,
+		HeadSHA: "h", BaseSHA: "b", StartSHA: "s",
+	}
+	findings := []review.Finding{
+		{File: "internal/store/renamed.go", Line: 1, SuggestedComment: "renamed"},
+	}
+	if err := p.PrintPayload(target, findings); err != nil {
+		t.Fatalf("PrintPayload: %v", err)
+	}
+	var parsed struct {
+		Position struct {
+			NewPath string `json:"new_path"`
+			OldPath string `json:"old_path"`
+		} `json:"position"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &parsed); err != nil {
+		t.Fatalf("parse: %v\nLINE: %s", err, buf.String())
+	}
+	if parsed.Position.NewPath != "internal/store/renamed.go" || parsed.Position.OldPath != "internal/store/old_name.go" {
+		t.Errorf("rename: (new_path, old_path) = (%q, %q), want (renamed.go, old_name.go)",
+			parsed.Position.NewPath, parsed.Position.OldPath)
 	}
 }
 
@@ -548,6 +674,82 @@ func TestPoster_Submit_GitLabPostsInlineDiscussions(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "Posted 2 inline thread(s)") {
 		t.Errorf("expected 'Posted 2 inline thread(s)' summary; got: %s", out)
+	}
+}
+
+// TestPoster_Submit_GitLabUsesOldPathForRenamedFiles is the regression
+// for diffsmith-dvz.4. A finding on a file that was renamed-with-hunks
+// (post-image path differs from pre-image path) must post with the diff
+// parser's OldPath in the position.old_path field. Sending old_path
+// equal to f.File (the post-image path) for a rename causes GitLab to
+// reject the inline thread because the (old_path, new_path) pair must
+// describe the actual rename in the MR's diff.
+func TestPoster_Submit_GitLabUsesOldPathForRenamedFiles(t *testing.T) {
+	calls := scriptedGlab(t, []ghResult{
+		{out: []byte(`{"id":"abc"}`)},
+		{out: []byte(`{"id":"def"}`)},
+	})
+
+	var buf bytes.Buffer
+	p := &Poster{
+		Out:    &buf,
+		Repost: true, // bypass dedup; the regression is about position fields, not dedup
+		// OldPaths is the runtime metadata bridge from the diff parser.
+		// The model never sees pre-image paths; the app layer builds this
+		// map from the parsed diff before calling Submit.
+		OldPaths: map[string]string{
+			"internal/store/renamed.go": "internal/store/old_name.go",
+			// "internal/util/keep.go" intentionally absent: same-path files
+			// must NOT need a map entry to post correctly.
+		},
+	}
+	target := review.ReviewTarget{
+		Host:     review.HostGitLab,
+		Owner:    "g",
+		Repo:     "p",
+		Number:   1,
+		HeadSHA:  "h",
+		BaseSHA:  "b",
+		StartSHA: "s",
+	}
+	findings := []review.Finding{
+		{File: "internal/store/renamed.go", Line: 11, SuggestedComment: "renamed"},
+		{File: "internal/util/keep.go", Line: 22, SuggestedComment: "unchanged path"},
+	}
+
+	if err := p.Submit(context.Background(), target, findings); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 glab calls, got %d", len(*calls))
+	}
+
+	type positionShape struct {
+		NewPath string `json:"new_path"`
+		OldPath string `json:"old_path"`
+	}
+	type bodyShape struct {
+		Position positionShape `json:"position"`
+	}
+
+	var renamed bodyShape
+	if err := json.Unmarshal([]byte((*calls)[0].stdin), &renamed); err != nil {
+		t.Fatalf("renamed-file stdin is not valid JSON: %v; raw: %s", err, (*calls)[0].stdin)
+	}
+	if renamed.Position.NewPath != "internal/store/renamed.go" {
+		t.Errorf("renamed file: new_path = %q, want internal/store/renamed.go", renamed.Position.NewPath)
+	}
+	if renamed.Position.OldPath != "internal/store/old_name.go" {
+		t.Errorf("renamed file: old_path = %q, want internal/store/old_name.go (from OldPaths map)", renamed.Position.OldPath)
+	}
+
+	var unchanged bodyShape
+	if err := json.Unmarshal([]byte((*calls)[1].stdin), &unchanged); err != nil {
+		t.Fatalf("unchanged-path stdin is not valid JSON: %v; raw: %s", err, (*calls)[1].stdin)
+	}
+	if unchanged.Position.NewPath != "internal/util/keep.go" || unchanged.Position.OldPath != "internal/util/keep.go" {
+		t.Errorf("unchanged file: (new_path, old_path) = (%q, %q), want both internal/util/keep.go (no map entry == not renamed)",
+			unchanged.Position.NewPath, unchanged.Position.OldPath)
 	}
 }
 

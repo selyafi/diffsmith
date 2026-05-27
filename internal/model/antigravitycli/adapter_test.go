@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/selyafi/diffsmith/internal/model"
 	"github.com/selyafi/diffsmith/internal/review"
 )
 
@@ -94,15 +95,23 @@ func TestReviewPropagatesPreflightError(t *testing.T) {
 	}
 }
 
-func TestAdapter_Synthesize_ReturnsSentinelError(t *testing.T) {
+// TestAdapter_DoesNotImplementSynthesizer is the post-dvz.7 contract:
+// the antigravity adapter intentionally does NOT carry a Synthesize
+// method, so a runtime type-assertion for model.Synthesizer must fail.
+// This frees experimental/review-only adapters from carrying a fake
+// Synthesize that exists only to satisfy the old composite interface.
+//
+// The synthesis call site in app/review.go consults this via
+// `leadModel.(model.Synthesizer)` and skips models that don't satisfy
+// the capability.
+func TestAdapter_DoesNotImplementSynthesizer(t *testing.T) {
 	a := New(nil)
-	_, err := a.Synthesize(context.Background(),
-		&review.ReviewInput{},
-		[]*review.ModelReviewResult{{Model: "codex"}})
-	if err == nil {
-		t.Fatal("expected sentinel error from antigravity Synthesize")
+
+	// Must satisfy the base Reviewer interface (Name, Preflight, Review).
+	var _ model.Reviewer = a
+
+	// Must NOT satisfy the Synthesizer capability.
+	if _, ok := any(a).(model.Synthesizer); ok {
+		t.Errorf("antigravity Adapter must not implement model.Synthesizer in v1 (agy has no non-interactive auth path; a real Synthesize would be a stub)")
 	}
-	// The error should be the same shape as Review's sentinel — exact
-	// text is checked by the Review tests; here we just confirm we
-	// don't panic and DO return an error.
 }

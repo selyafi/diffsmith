@@ -157,19 +157,22 @@ func TestUpdateCopyOnC_ClearsOnNextKey(t *testing.T) {
 	}
 }
 
-// TestUpdateMarkForPostOnP verifies pressing 'p' marks the current
-// finding for upstream posting via the M5b runner.
+// TestUpdateMarkForPostOnP verifies pressing 'p' on an approved finding
+// marks it for upstream posting via the M5b runner. Pending findings
+// are filtered out at the trust boundary (diffsmith-dvz.2); the user
+// must press 'a' to approve before 'p' becomes effective.
 func TestUpdateMarkForPostOnP(t *testing.T) {
 	m := NewModel([]review.Finding{
 		{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "A", Model: "t", Confidence: 0.5},
 		{File: "b.go", Line: 2, Severity: review.SeverityHigh, Title: "B", Model: "t", Confidence: 0.5},
 	})
 
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
 
 	marked := m.GetFindingsMarkedForPost()
 	if len(marked) != 1 || marked[0].File != "a.go" {
-		t.Errorf("'p' should mark current (a.go) for post; got %+v", marked)
+		t.Errorf("'p' after 'a' should mark current (a.go) for post; got %+v", marked)
 	}
 }
 

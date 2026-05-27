@@ -447,6 +447,7 @@ func TestReviewPrintPayloadRoutesMarkedFindingsToDryRun(t *testing.T) {
 
 	withFakePicker(t, map[string]model.Model{"codex": mockModel})
 	withFakeTUI(t, func(m *tui.Model) error {
+		m.ApproveCurrent()
 		m.MarkCurrentForPost()
 		return nil
 	})
@@ -481,7 +482,7 @@ func withFakeSubmit(t *testing.T) (calls *int, captured *[]review.Finding) {
 	c := 0
 	var f []review.Finding
 	prev := submitPost
-	submitPost = func(_ context.Context, _ io.Writer, _ review.ReviewTarget, marked []review.Finding, _ bool) error {
+	submitPost = func(_ context.Context, _ io.Writer, _ review.ReviewTarget, marked []review.Finding, _ bool, _ map[string]string) error {
 		c++
 		f = append([]review.Finding(nil), marked...)
 		return nil
@@ -490,9 +491,146 @@ func withFakeSubmit(t *testing.T) (calls *int, captured *[]review.Finding) {
 	return &c, &f
 }
 
+// withFakeSubmitCapturingOldPaths is the variant of withFakeSubmit that
+// also captures the oldPaths map passed through submitPost. Used by the
+// rename-wire-up test (diffsmith-dvz.4) without disturbing every other
+// test's call shape.
+func withFakeSubmitCapturingOldPaths(t *testing.T) *map[string]string {
+	t.Helper()
+	captured := map[string]string{}
+	prev := submitPost
+	submitPost = func(_ context.Context, _ io.Writer, _ review.ReviewTarget, _ []review.Finding, _ bool, oldPaths map[string]string) error {
+		for k, v := range oldPaths {
+			captured[k] = v
+		}
+		return nil
+	}
+	t.Cleanup(func() { submitPost = prev })
+	return &captured
+}
+
 // stdinFor wires a reader as the cobra root's stdin so the confirmation
 // prompt reads from this string instead of the real terminal.
 func stdinFor(s string) *strings.Reader { return strings.NewReader(s) }
+
+// TestWriteFindings_NoDebugKeepsCompactQuarantineSummary is the
+// regression for diffsmith-dvz.6 (compact path): when --debug is OFF
+// the user sees a single counter line plus the "pass --debug to
+// inspect" hint, and per-quarantined details stay out of the way.
+func TestWriteFindings_NoDebugKeepsCompactQuarantineSummary(t *testing.T) {
+	var buf bytes.Buffer
+	quarantined := []review.Quarantined{
+		{Candidate: review.FindingCandidate{File: "secret/internal.go", Line: 42, Title: "Reveal nothing"}, Reason: "line 42 is a context line, not an added or modified line"},
+	}
+	writeFindings(&buf, nil, quarantined, 1, "", false)
+	out := buf.String()
+	if !strings.Contains(out, "1 finding(s) quarantined") {
+		t.Errorf("compact summary must name the quarantined count; got:\n%s", out)
+	}
+	if !strings.Contains(out, "--debug") {
+		t.Errorf("compact summary must point at --debug; got:\n%s", out)
+	}
+	// Compact path must NOT dump quarantine details.
+	if strings.Contains(out, "secret/internal.go") || strings.Contains(out, "Reason:") {
+		t.Errorf("compact path leaked quarantined details; got:\n%s", out)
+	}
+}
+
+// TestWriteFindings_DebugDumpsQuarantinedDetails is the regression for
+// diffsmith-dvz.6 (debug path): when --debug is ON the user sees each
+// quarantined candidate's file, line, title, and reason so they can
+// understand why validation rejected it.
+func TestWriteFindings_DebugDumpsQuarantinedDetails(t *testing.T) {
+	var buf bytes.Buffer
+	quarantined := []review.Quarantined{
+		{
+			Candidate: review.FindingCandidate{
+				File: "internal/store/buffer.go", Line: 9999,
+				Title: "Outside hunk",
+			},
+			Reason: "line 9999 is outside any hunk in internal/store/buffer.go",
+		},
+		{
+			Candidate: review.FindingCandidate{
+				File: "internal/store/buffer.go", Line: 12,
+				Title: "Empty comment",
+			},
+			Reason: "suggested_comment is empty",
+		},
+	}
+	writeFindings(&buf, nil, quarantined, 2, "", true)
+	out := buf.String()
+	for _, want := range []string{
+		"Outside hunk",                          // first title
+		"Empty comment",                         // second title
+		"internal/store/buffer.go:9999",         // first location
+		"internal/store/buffer.go:12",           // second location
+		"line 9999 is outside any hunk",         // first reason
+		"suggested_comment is empty",            // second reason
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("debug dump missing %q; got:\n%s", want, out)
+		}
+	}
+	// Debug path must not also tell the user to pass --debug — they're already in it.
+	if strings.Contains(out, "pass --debug") {
+		t.Errorf("debug path should not include the 'pass --debug to inspect' hint; got:\n%s", out)
+	}
+}
+
+// TestReviewWiresRenameMapToSubmitPost is the regression for
+// diffsmith-dvz.4. The app layer must derive the post-image → pre-image
+// rename map from the parsed diff (input.Files) and pass it through
+// submitPost so the GitLab path can populate position.old_path
+// correctly for renamed-with-hunks files. Same-path files must not
+// appear in the map (sparse lookup).
+func TestReviewWiresRenameMapToSubmitPost(t *testing.T) {
+	in := sampleReviewInput()
+	// Mix one renamed-with-hunks file with one same-path file. The map
+	// must contain only the renamed entry. The renamed file's hunk has
+	// one added line at NewLine 1 so the model finding survives Validate
+	// and reaches the submitPost branch (otherwise the test would pass
+	// vacuously: no marked findings → no submitPost call → no captured map).
+	in.Files = []*diff.DiffFile{
+		{
+			Path: "internal/store/renamed.go", OldPath: "internal/store/old_name.go",
+			Kind: diff.FileRenameWithHunks,
+			Hunks: []diff.Hunk{{
+				NewStart: 1, NewLines: 1,
+				Lines: []diff.HunkLine{{Side: diff.SideAdded, NewLine: 1, Content: "package store"}},
+			}},
+		},
+		{Path: "auth/session.go", Kind: diff.FileText, Hunks: []diff.Hunk{{}}},
+	}
+	stubProv := &stubProvider{supports: func(string) bool { return true }, fetchInput: in}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File: "internal/store/renamed.go", Line: 1, Severity: "high",
+				Title: "On renamed file", SuggestedComment: "rename note", Confidence: 0.9,
+			}},
+		},
+	}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
+	withFakeTUI(t, func(m *tui.Model) error { m.ApproveCurrent(); m.MarkCurrentForPost(); return nil })
+	captured := withFakeSubmitCapturingOldPaths(t)
+
+	root, _ := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetIn(stdinFor("y\n"))
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got, want := (*captured)["internal/store/renamed.go"], "internal/store/old_name.go"; got != want {
+		t.Errorf("oldPaths[renamed.go] = %q, want %q (rename must reach submitPost)", got, want)
+	}
+	if _, present := (*captured)["auth/session.go"]; present {
+		t.Errorf("same-path file must NOT appear in oldPaths map; got entry for auth/session.go")
+	}
+}
 
 func TestReviewConfirmationPromptYesProceedsToSubmit(t *testing.T) {
 	stubProv := &stubProvider{supports: func(string) bool { return true }, fetchInput: reviewInputWithSessionDiff(t)}
@@ -507,7 +645,7 @@ func TestReviewConfirmationPromptYesProceedsToSubmit(t *testing.T) {
 		},
 	}
 	withFakePicker(t, map[string]model.Model{"codex": mockModel})
-	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
+	withFakeTUI(t, func(m *tui.Model) error { m.ApproveCurrent(); m.MarkCurrentForPost(); return nil })
 	calls, captured := withFakeSubmit(t)
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
@@ -542,7 +680,7 @@ func TestReviewConfirmationPromptCapitalYProceedsToSubmit(t *testing.T) {
 		},
 	}
 	withFakePicker(t, map[string]model.Model{"codex": mockModel})
-	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
+	withFakeTUI(t, func(m *tui.Model) error { m.ApproveCurrent(); m.MarkCurrentForPost(); return nil })
 	calls, _ := withFakeSubmit(t)
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
@@ -618,7 +756,7 @@ func TestReviewConfirmationPromptEOFSkipsSubmit(t *testing.T) {
 		},
 	}
 	withFakePicker(t, map[string]model.Model{"codex": mockModel})
-	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
+	withFakeTUI(t, func(m *tui.Model) error { m.ApproveCurrent(); m.MarkCurrentForPost(); return nil })
 	calls, _ := withFakeSubmit(t)
 
 	root, _ := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
@@ -648,7 +786,7 @@ func TestReviewPrintPayloadFlagBypassesConfirmationPrompt(t *testing.T) {
 		},
 	}
 	withFakePicker(t, map[string]model.Model{"codex": mockModel})
-	withFakeTUI(t, func(m *tui.Model) error { m.MarkCurrentForPost(); return nil })
+	withFakeTUI(t, func(m *tui.Model) error { m.ApproveCurrent(); m.MarkCurrentForPost(); return nil })
 
 	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
 	// Empty stdin would block forever if --print-payload didn't bypass the prompt.

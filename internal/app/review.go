@@ -35,8 +35,33 @@ var runTUI = func(loader *tui.LoaderModel, pipeline func(send func(tea.Msg))) er
 // submitPost is the seam between runReview and the GitHub poster. Tests
 // swap this to assert whether the Submit branch ran (and with what
 // findings) without shelling out to gh. Mirrors the runTUI pattern.
-var submitPost = func(ctx context.Context, out io.Writer, target review.ReviewTarget, marked []review.Finding, repost bool) error {
-	return (&post.Poster{Out: out, Repost: repost}).Submit(ctx, target, marked)
+//
+// oldPaths carries the rename map derived from the parsed diff so the
+// GitLab path can populate position.old_path correctly for
+// renamed-with-hunks files. The GitHub path ignores it.
+var submitPost = func(ctx context.Context, out io.Writer, target review.ReviewTarget, marked []review.Finding, repost bool, oldPaths map[string]string) error {
+	return (&post.Poster{Out: out, Repost: repost, OldPaths: oldPaths}).Submit(ctx, target, marked)
+}
+
+// renameMapFromFiles extracts the post-image → pre-image rename mapping
+// from the parsed diff. Only renamed-with-hunks files get an entry;
+// same-path files are absent from the map so callers can use it as a
+// sparse lookup (`map[file]` returns "" for unchanged paths).
+func renameMapFromFiles(files []*diff.DiffFile) map[string]string {
+	var m map[string]string
+	for _, f := range files {
+		if f == nil || f.Kind != diff.FileRenameWithHunks {
+			continue
+		}
+		if f.OldPath == "" || f.OldPath == f.Path {
+			continue
+		}
+		if m == nil {
+			m = make(map[string]string)
+		}
+		m[f.Path] = f.OldPath
+	}
+	return m
 }
 
 type reviewFlags struct {
@@ -55,6 +80,11 @@ type reviewFlags struct {
 	// already exists at the same (file, line). Default false:
 	// duplicates are skipped with a summary line.
 	repost bool
+	// debug expands the post-TUI quarantine section: instead of a
+	// single counter line pointing at --debug, each rejected candidate
+	// is printed with its (file:line), title, and the validator's
+	// reason. The default-off path stays compact for normal use.
+	debug bool
 }
 
 func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *cobra.Command {
@@ -91,8 +121,9 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "fetch and normalize the diff, then stop before the model call")
 	cmd.Flags().BoolVar(&flags.printPrompt, "print-prompt", false, "print the single-model review prompt and exit without invoking the model")
 	cmd.Flags().BoolVar(&flags.printSynthesisPrompt, "print-synthesis-prompt", false, "print the multi-model synthesis prompt (using stub reviewer outputs) and exit without invoking the model")
-	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print the GraphQL payload(s) for findings marked with 'p' in the TUI, instead of posting upstream")
+	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print the host-specific upstream payload(s) for findings marked with 'p' in the TUI (GitHub GraphQL addThread input on PRs; GitLab discussions API JSON on MRs), instead of posting upstream")
 	cmd.Flags().BoolVar(&flags.repost, "repost", false, "bypass dedup and post every approved finding even if a diffsmith thread already exists at the same file:line")
+	cmd.Flags().BoolVar(&flags.debug, "debug", false, "print each quarantined model finding's (file:line), title, and validator rejection reason after the TUI session ends")
 
 	return cmd
 }
@@ -216,8 +247,17 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 					send(tui.PhaseStatusMsg(fmt.Sprintf("skipping synthesis with %s: no matching model registered", candidate.Model)))
 					continue
 				}
+				// Synthesis is an optional capability (model.Synthesizer).
+				// A review-only adapter (e.g. antigravity in v1) does
+				// not satisfy it; surface the skip rather than panic
+				// or invent a stub result.
+				leadSynth, ok := leadModel.(model.Synthesizer)
+				if !ok {
+					send(tui.PhaseStatusMsg(fmt.Sprintf("skipping synthesis with %s: model does not implement the Synthesizer capability", candidate.Model)))
+					continue
+				}
 				send(tui.PhaseStatusMsg(fmt.Sprintf("Synthesizing with %s…", candidate.Model)))
-				synth, err := leadModel.Synthesize(ctx, input, surviving)
+				synth, err := leadSynth.Synthesize(ctx, input, surviving)
 				if err == nil && synth != nil {
 					final = synth
 					synthesisLeadName = candidate.Model
@@ -252,16 +292,16 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		var postErr error
 		switch {
 		case flags.printPayload:
-			postErr = (&post.Poster{Out: cmd.OutOrStdout()}).PrintPayload(marked)
+			postErr = (&post.Poster{Out: cmd.OutOrStdout(), OldPaths: renameMapFromFiles(input.Files)}).PrintPayload(input.Target, marked)
 		case confirmPost(cmd, len(marked), input.Target):
-			postErr = submitPost(ctx, cmd.OutOrStdout(), input.Target, marked, flags.repost)
+			postErr = submitPost(ctx, cmd.OutOrStdout(), input.Target, marked, flags.repost, renameMapFromFiles(input.Files))
 		}
 		if postErr != nil {
 			return postErr
 		}
 	}
 
-	writeFindings(cmd.OutOrStdout(), loader.GetApprovedFindings(), loader.Quarantined(), loader.TotalReviewed(), runSummary)
+	writeFindings(cmd.OutOrStdout(), loader.GetApprovedFindings(), loader.Quarantined(), loader.TotalReviewed(), runSummary, flags.debug)
 	return nil
 }
 
@@ -357,7 +397,12 @@ func aggregateErrors(dropped []modelOutcome) error {
 // zero, the model genuinely returned nothing; when it's non-zero but
 // `valid` is empty, the user approved none — those two cases need
 // different copy so a reviewer can tell them apart (per diffsmith-14p).
-func writeFindings(w io.Writer, valid []review.Finding, quarantined []review.Quarantined, totalReviewed int, runSummary string) {
+//
+// debug controls how quarantined findings are surfaced: off (default)
+// prints a one-line counter pointing at --debug; on dumps each
+// quarantined candidate's (file:line), title, and the validator's
+// reason so operators can see why a candidate was rejected.
+func writeFindings(w io.Writer, valid []review.Finding, quarantined []review.Quarantined, totalReviewed int, runSummary string, debug bool) {
 	if runSummary != "" {
 		fmt.Fprintln(w, runSummary)
 	}
@@ -382,6 +427,14 @@ func writeFindings(w io.Writer, valid []review.Finding, quarantined []review.Qua
 		fmt.Fprintln(w)
 	}
 	if n := len(quarantined); n > 0 {
-		fmt.Fprintf(w, "(%d finding(s) quarantined by validation; pass --debug to inspect.)\n", n)
+		if !debug {
+			fmt.Fprintf(w, "(%d finding(s) quarantined by validation; pass --debug to inspect.)\n", n)
+			return
+		}
+		fmt.Fprintf(w, "Quarantined (%d):\n", n)
+		for _, q := range quarantined {
+			fmt.Fprintf(w, "  %s:%d  %s\n", q.Candidate.File, q.Candidate.Line, q.Candidate.Title)
+			fmt.Fprintf(w, "    Reason: %s\n", q.Reason)
+		}
 	}
 }

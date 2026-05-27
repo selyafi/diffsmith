@@ -33,6 +33,36 @@ func TestRootHelpListsReviewSubcommand(t *testing.T) {
 	}
 }
 
+// TestRootHelpDescribesOptInPosting pins the trust-boundary contract:
+// the root help must NOT say "Diffsmith never posts" (that was true
+// pre-M5b; it has been false since the explicit posting path landed).
+// It must also tell the user that posting is opt-in and gated on
+// confirmation — otherwise the help text is dangerously stale for a
+// local-first tool handling private code.
+func TestRootHelpDescribesOptInPosting(t *testing.T) {
+	root := newRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--help"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("--help: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "never posts") {
+		t.Errorf("help must not claim 'never posts'; posting has been opt-in since M5b\nGOT:\n%s", got)
+	}
+	// The help must surface BOTH the approval gate and the explicit
+	// confirmation prompt so a first-time reader understands the trust
+	// boundary without reading the README.
+	for _, want := range []string{"approve", "post"} {
+		if !strings.Contains(strings.ToLower(got), want) {
+			t.Errorf("help must mention %q; got:\n%s", want, got)
+		}
+	}
+}
+
 func TestDefaultRegistryDispatchesGitHubAndGitLab(t *testing.T) {
 	// The wiring under test: defaultRegistry() must contain both adapters
 	// so the CLI dispatches correctly on URL shape. This is the load-bearing
