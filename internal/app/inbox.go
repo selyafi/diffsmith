@@ -56,7 +56,7 @@ func newInboxCmd(registry *provider.Registry, models map[string]model.Model) *co
 			return runInboxCommandWithSelected(cmd, flags, registry, selected)
 		},
 	}
-	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print GraphQL payload(s) instead of posting upstream when reviewing")
+	registerPostFlowFlags(cmd, flags)
 	return cmd
 }
 

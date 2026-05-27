@@ -43,6 +43,17 @@ var submitPost = func(ctx context.Context, out io.Writer, target review.ReviewTa
 	return (&post.Poster{Out: out, Repost: repost, OldPaths: oldPaths}).Submit(ctx, target, marked)
 }
 
+// registerPostFlowFlags adds the three flags that govern the
+// post-flow on every entry point (review, inbox, bare diffsmith).
+// Centralising the registration so the entry points stay symmetric;
+// before this any drift (a flag added to review but not inbox) was
+// invisible until users noticed it (diffsmith-3e8).
+func registerPostFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
+	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print the host-specific upstream payload(s) for findings marked with 'p' in the TUI (GitHub GraphQL addThread input on PRs; GitLab discussions API JSON on MRs), instead of posting upstream")
+	cmd.Flags().BoolVar(&flags.repost, "repost", false, "bypass dedup and post every approved finding even if a diffsmith thread already exists at the same file:line")
+	cmd.Flags().BoolVar(&flags.debug, "debug", false, "print each quarantined model finding's (file:line), title, and validator rejection reason after the TUI session ends")
+}
+
 // renameMapFromFiles extracts the post-image → pre-image rename mapping
 // from the parsed diff. Only renamed-with-hunks files get an entry;
 // same-path files are absent from the map so callers can use it as a
@@ -121,9 +132,7 @@ func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *c
 	cmd.Flags().BoolVar(&flags.dryRun, "dry-run", false, "fetch and normalize the diff, then stop before the model call")
 	cmd.Flags().BoolVar(&flags.printPrompt, "print-prompt", false, "print the single-model review prompt and exit without invoking the model")
 	cmd.Flags().BoolVar(&flags.printSynthesisPrompt, "print-synthesis-prompt", false, "print the multi-model synthesis prompt (using stub reviewer outputs) and exit without invoking the model")
-	cmd.Flags().BoolVar(&flags.printPayload, "print-payload", false, "print the host-specific upstream payload(s) for findings marked with 'p' in the TUI (GitHub GraphQL addThread input on PRs; GitLab discussions API JSON on MRs), instead of posting upstream")
-	cmd.Flags().BoolVar(&flags.repost, "repost", false, "bypass dedup and post every approved finding even if a diffsmith thread already exists at the same file:line")
-	cmd.Flags().BoolVar(&flags.debug, "debug", false, "print each quarantined model finding's (file:line), title, and validator rejection reason after the TUI session ends")
+	registerPostFlowFlags(cmd, flags)
 
 	return cmd
 }
@@ -227,6 +236,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 
 		final := surviving[0]
 		synthesisLeadName := "" // empty == no synthesis happened
+		var synthesisSkips []string
 		if len(surviving) >= 2 {
 			// Spec §14 AC8: try synthesis on each surviving model in
 			// priority order. The first one that succeeds wins. If all
@@ -237,35 +247,29 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 			// synthesis was skipped.
 			for _, candidate := range surviving {
 				leadModel := findModelByName(selected.All, candidate.Model)
-				if leadModel == nil {
-					// Surface the skip so a silent "name doesn't
-					// match" doesn't masquerade as a synthesis
-					// failure later. In practice this shouldn't
-					// fire — outcome.Model always comes from a
-					// model in selected.All — but if it ever does
-					// (drift, rename), the user sees the cause.
-					send(tui.PhaseStatusMsg(fmt.Sprintf("skipping synthesis with %s: no matching model registered", candidate.Model)))
+				if leadModel != nil {
+					// Only announce the attempt when there's
+					// actually a lead model to invoke. Without this
+					// guard the "Synthesizing with X…" message
+					// would flash even when the next call is going
+					// to bail with "no matching model registered."
+					send(tui.PhaseStatusMsg(fmt.Sprintf("Synthesizing with %s…", candidate.Model)))
+				}
+				synth, skipReason := attemptSynthesis(ctx, leadModel, input, surviving)
+				if skipReason != "" {
+					// Every skip surfaces a reason — including the
+					// (nil, nil) silent-fallback that attemptSynthesis
+					// catches explicitly (diffsmith-4f8). Without
+					// this the loop could quietly advance and the
+					// user would see surviving[0]'s own findings
+					// under the impression synthesis succeeded.
+					send(tui.PhaseStatusMsg(fmt.Sprintf("skipping synthesis with %s: %s", candidate.Model, skipReason)))
+					synthesisSkips = append(synthesisSkips, fmt.Sprintf("%s: %s", candidate.Model, skipReason))
 					continue
 				}
-				// Synthesis is an optional capability (model.Synthesizer).
-				// A review-only adapter (e.g. antigravity in v1) does
-				// not satisfy it; surface the skip rather than panic
-				// or invent a stub result.
-				leadSynth, ok := leadModel.(model.Synthesizer)
-				if !ok {
-					send(tui.PhaseStatusMsg(fmt.Sprintf("skipping synthesis with %s: model does not implement the Synthesizer capability", candidate.Model)))
-					continue
-				}
-				send(tui.PhaseStatusMsg(fmt.Sprintf("Synthesizing with %s…", candidate.Model)))
-				synth, err := leadSynth.Synthesize(ctx, input, surviving)
-				if err == nil && synth != nil {
-					final = synth
-					synthesisLeadName = candidate.Model
-					break
-				}
-				if err != nil {
-					send(tui.PhaseStatusMsg(fmt.Sprintf("%s synthesis failed: %v", candidate.Model, err)))
-				}
+				final = synth
+				synthesisLeadName = candidate.Model
+				break
 			}
 		}
 
@@ -273,7 +277,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		idx := diff.NewIndex(input.Files)
 		valid, quarantined := review.Validate(final.Findings, final.Model, idx)
 
-		runSummary = buildRunSummary(selected.All, surviving, dropped, synthesisLeadName, len(final.Findings))
+		runSummary = buildRunSummary(selected.All, surviving, dropped, synthesisLeadName, len(final.Findings), synthesisSkips)
 		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined})
 	}
 	if err := runTUI(loader, pipeline); err != nil {
@@ -338,8 +342,20 @@ func confirmPost(cmd *cobra.Command, n int, target review.ReviewTarget) bool {
 //
 // finalCount is the count of findings BEFORE the validator pass — the
 // validator's quarantine count is already surfaced separately.
-func buildRunSummary(selectedAll []model.Model, surviving []*review.ModelReviewResult, dropped []modelOutcome, synthesisLead string, finalCount int) string {
-	if len(selectedAll) == 0 {
+//
+// synthesisSkips carries one human-readable line per candidate that
+// did NOT lead synthesis (no Synthesizer capability, error,
+// (nil, nil), etc.). When synthesis ultimately failed for all
+// candidates, the skip reasons are appended to the summary so the
+// user has a persistent audit trail instead of relying on transient
+// PhaseStatusMsg flashes (diffsmith-wfq).
+func buildRunSummary(selectedAll []model.Model, surviving []*review.ModelReviewResult, dropped []modelOutcome, synthesisLead string, finalCount int, synthesisSkips []string) string {
+	if len(selectedAll) == 0 && len(surviving) == 0 {
+		// Tests can pass nil selectedAll if they only care about the
+		// surviving+skips shape. Production always passes a non-nil
+		// selected.All; the original guard was 'len(selectedAll) == 0
+		// → return ""' but that ate the synthesis-skips audit case
+		// where surviving!=empty but selectedAll is a test stub.
 		return ""
 	}
 	parts := make([]string, 0, len(surviving)+len(dropped))
@@ -359,7 +375,11 @@ func buildRunSummary(selectedAll []model.Model, surviving []*review.ModelReviewR
 		return fmt.Sprintf("%s → synthesized via %s into %d findings.", prefix, synthesisLead, finalCount)
 	case len(surviving) >= 2:
 		// Synthesis was attempted but all attempts failed; using surviving[0].
-		return fmt.Sprintf("%s; synthesis failed → using %s (%d findings).", prefix, surviving[0].Model, finalCount)
+		base := fmt.Sprintf("%s; synthesis failed → using %s (%d findings).", prefix, surviving[0].Model, finalCount)
+		if len(synthesisSkips) > 0 {
+			base += "\n  Synthesis skips: " + strings.Join(synthesisSkips, "; ")
+		}
+		return base
 	default:
 		return prefix + "."
 	}

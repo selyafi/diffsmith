@@ -125,3 +125,10 @@ func writeSchema() (string, func(), error) {
 	}
 	return f.Name(), func() { _ = os.Remove(f.Name()) }, nil
 }
+
+// Compile-time interface guards: catch any future refactor that
+// accidentally drops a capability. diffsmith-0hy.
+var (
+	_ model.Reviewer    = (*Adapter)(nil)
+	_ model.Synthesizer = (*Adapter)(nil)
+)

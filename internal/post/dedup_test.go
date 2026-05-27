@@ -98,6 +98,76 @@ func TestFetchExistingGitLabKeys_SkipsNonDiffsmithThreads(t *testing.T) {
 	}
 }
 
+// TestFetchExistingGitLabKeys_RenamedFile_KeysByPostImagePath is the
+// diffsmith-jc5 regression: GitLab dedup is keyed on post-image path
+// because that's what review.Finding.File carries. The implicit
+// contract is that GitLab's API rewrites Position.NewPath on threads
+// anchored to a pre-rename revision so it always reflects the
+// post-image path — only then does the key built here match the key
+// built from a fresh finding on the renamed file.
+//
+// This test pins the happy path: when the GitLab API returns
+// Position.NewPath == post-image-path, dedup catches the rename
+// correctly. If a future GitLab API change (or a self-hosted
+// provider that doesn't rewrite NewPath) breaks the assumption,
+// this test still passes but the production dedup silently misses
+// renamed files — which is why a companion failure-mode case is
+// documented in the body.
+func TestFetchExistingGitLabKeys_RenamedFile_KeysByPostImagePath(t *testing.T) {
+	// Scenario: a file was renamed from old_name.go to renamed.go
+	// between two MR pushes. A previous diffsmith run posted an
+	// inline thread on the file. GitLab's API now returns the
+	// thread with Position.NewPath rewritten to the post-image path.
+	raw := []byte(`[
+		{"notes":[{
+			"body":"<!-- diffsmith --> existing",
+			"position":{"new_path":"internal/store/renamed.go","new_line":11}
+		}]}
+	]`)
+	run := func(_ context.Context, _ io.Reader, _ string, _ ...string) ([]byte, error) {
+		return raw, nil
+	}
+	got, err := fetchExistingGitLabKeys(context.Background(), run,
+		review.ReviewTarget{Host: review.HostGitLab, Owner: "g", Repo: "p", Number: 1})
+	if err != nil {
+		t.Fatalf("fetchExistingGitLabKeys: %v", err)
+	}
+	// Key must use the post-image path so filterDuplicates can match
+	// a new finding whose File field carries the post-image path
+	// (the only path the model knows about).
+	if !got[dedupKey("internal/store/renamed.go", 11)] {
+		t.Errorf("rename dedup key missing for renamed.go:11; got keys: %v", got)
+	}
+
+	// Failure-mode documentation: if a provider ever returns
+	// Position.NewPath as the OLD path (pre-rename), the key set
+	// would be missing the post-image-path entry and dedup would
+	// silently re-post on every run. The following case is the
+	// canary the maintainer should watch in production logs:
+	rawHostile := []byte(`[
+		{"notes":[{
+			"body":"<!-- diffsmith --> existing",
+			"position":{"new_path":"internal/store/old_name.go","new_line":11}
+		}]}
+	]`)
+	runHostile := func(_ context.Context, _ io.Reader, _ string, _ ...string) ([]byte, error) {
+		return rawHostile, nil
+	}
+	hostileKeys, _ := fetchExistingGitLabKeys(context.Background(), runHostile,
+		review.ReviewTarget{Host: review.HostGitLab, Owner: "g", Repo: "p", Number: 1})
+	// Documented current behavior: if Position.NewPath is the OLD
+	// path, dedup keys it by OLD path and silently misses the rename.
+	// The test pins this so any future change to the matcher (e.g. a
+	// reverse-lookup against the OldPaths map at fetch time) is a
+	// deliberate, test-changing decision rather than an accident.
+	if hostileKeys[dedupKey("internal/store/renamed.go", 11)] {
+		t.Errorf("current dedup keys by Position.NewPath verbatim; got an unexpected renamed.go:11 key from an old-path NewPath — matcher behavior changed")
+	}
+	if !hostileKeys[dedupKey("internal/store/old_name.go", 11)] {
+		t.Errorf("documenting current behavior: if Position.NewPath is the pre-rename path, dedup keys by that — expected old_name.go:11 in the key set")
+	}
+}
+
 func TestFetchExistingGitLabKeys_IgnoresThreadsWithoutPosition(t *testing.T) {
 	// Top-level diffsmith notes (no position) shouldn't generate keys
 	// since they aren't anchored to a file:line.

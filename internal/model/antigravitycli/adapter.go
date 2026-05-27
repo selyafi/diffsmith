@@ -5,9 +5,18 @@ import (
 	"errors"
 	"os/exec"
 
+	"github.com/selyafi/diffsmith/internal/model"
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/review"
 )
+
+// Compile-time interface guard: this adapter implements model.Reviewer
+// but NOT model.Synthesizer (per S8b — agy has no non-interactive
+// auth path). The negative assertion can't be expressed in Go's type
+// system; the positive guard plus the runtime test
+// TestAdapter_DoesNotImplementSynthesizer in adapter_test.go together
+// document and enforce the contract. diffsmith-0hy.
+var _ model.Reviewer = (*Adapter)(nil)
 
 // Adapter implements model.Reviewer against the Antigravity CLI (`agy`).
 //

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/selyafi/diffsmith/internal/provider/githubgh"
 	"github.com/selyafi/diffsmith/internal/provider/gitlabglab"
 )
@@ -60,6 +62,55 @@ func TestRootHelpDescribesOptInPosting(t *testing.T) {
 		if !strings.Contains(strings.ToLower(got), want) {
 			t.Errorf("help must mention %q; got:\n%s", want, got)
 		}
+	}
+}
+
+// TestPostFlowFlagsAreSymmetricAcrossEntryPoints is the diffsmith-3e8
+// regression: --repost, --print-payload, and --debug all affect the
+// review post-flow, and they must be available from every entry
+// point that exercises that flow. Before this fix, bare `diffsmith`
+// exposed only --repost and `diffsmith inbox` exposed only
+// --print-payload, so users had to reach for `diffsmith review` just
+// to get --debug.
+func TestPostFlowFlagsAreSymmetricAcrossEntryPoints(t *testing.T) {
+	root := newRootCmd()
+
+	cases := []struct {
+		name    string
+		findCmd func() *cobra.Command
+		wantOK  []string // flags that must be present
+	}{
+		{"bare root", func() *cobra.Command { return root }, []string{"repost", "print-payload", "debug"}},
+		{"inbox", func() *cobra.Command {
+			for _, c := range root.Commands() {
+				if c.Name() == "inbox" {
+					return c
+				}
+			}
+			return nil
+		}, []string{"repost", "print-payload", "debug"}},
+		{"review", func() *cobra.Command {
+			for _, c := range root.Commands() {
+				if c.Name() == "review" {
+					return c
+				}
+			}
+			return nil
+		}, []string{"repost", "print-payload", "debug"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := tc.findCmd()
+			if cmd == nil {
+				t.Fatalf("could not find %s subcommand", tc.name)
+			}
+			for _, flag := range tc.wantOK {
+				if cmd.Flags().Lookup(flag) == nil {
+					t.Errorf("%s command missing --%s flag", tc.name, flag)
+				}
+			}
+		})
 	}
 }
 

@@ -489,6 +489,43 @@ func TestPoster_PrintPayload_GitLabEmitsDiscussionsPositionShape(t *testing.T) {
 	}
 }
 
+// TestPoster_PrintPayload_RejectsUnknownHost is the diffsmith-696
+// regression: PrintPayload used to default to GitHub for any
+// non-GitLab host (including the zero-value Host=""), so a future
+// provider would silently get the wrong payload shape printed. The
+// preview must refuse to guess.
+func TestPoster_PrintPayload_RejectsUnknownHost(t *testing.T) {
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf, Repost: true}
+	target := review.ReviewTarget{Host: review.Host("bitbucket.org"), Owner: "o", Repo: "r", Number: 1}
+	findings := []review.Finding{{File: "a.go", Line: 1, SuggestedComment: "c"}}
+
+	err := p.PrintPayload(target, findings)
+	if err == nil {
+		t.Fatal("expected error on unknown host; got nil — preview must not guess GitHub shape")
+	}
+	if !strings.Contains(err.Error(), "bitbucket.org") {
+		t.Errorf("error should name the unsupported host so the user sees what was unknown; got %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("no payload should be written for an unknown host; got: %q", buf.String())
+	}
+}
+
+// TestPoster_PrintPayload_RejectsEmptyHost confirms the zero-value
+// Host="" path errors too — same diffsmith-696 contract: the empty
+// case is reachable today via uninitialized ReviewTarget literals.
+func TestPoster_PrintPayload_RejectsEmptyHost(t *testing.T) {
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf, Repost: true}
+	target := review.ReviewTarget{Owner: "o", Repo: "r", Number: 1} // Host intentionally empty
+	findings := []review.Finding{{File: "a.go", Line: 1, SuggestedComment: "c"}}
+
+	if err := p.PrintPayload(target, findings); err == nil {
+		t.Fatal("expected error on empty host; got nil")
+	}
+}
+
 // TestPoster_PrintPayload_GitLabRequiresDiffRefs is the follow-up to
 // dvz.5's code review: printGitLabPayload must mirror submitGitLab's
 // SHA-presence guard. Substituting placeholders for missing SHAs lets

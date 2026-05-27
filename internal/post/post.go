@@ -490,14 +490,19 @@ func formatGitLabNote(f review.Finding) string {
 // only exists after a real submit); GitLab gets the discussions API
 // body, with the same position fields submitGitLab would marshal.
 //
-// Routing on target.Host matters: the two shapes are incompatible, so
-// printing the wrong one would mislead a user who copies the preview
-// into a separate gh/glab invocation.
+// Routing on target.Host is explicit: an unknown host returns an
+// error rather than silently defaulting to GitHub, so a future
+// provider can't ship a shape mismatch by accident (diffsmith-696).
+// Empty Host (zero-value ReviewTarget) hits the same error path.
 func (p *Poster) PrintPayload(target review.ReviewTarget, findings []review.Finding) error {
-	if target.Host == review.HostGitLab {
+	switch target.Host {
+	case review.HostGitHub:
+		return p.printGitHubPayload(findings)
+	case review.HostGitLab:
 		return p.printGitLabPayload(target, findings)
+	default:
+		return fmt.Errorf("PrintPayload: unsupported host %q (known: %q, %q)", target.Host, review.HostGitHub, review.HostGitLab)
 	}
-	return p.printGitHubPayload(findings)
 }
 
 func (p *Poster) printGitHubPayload(findings []review.Finding) error {
