@@ -4,6 +4,121 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.1.6 — 2026-05-27
+
+### Security
+
+- Trust-boundary fix for the TUI post flag: pressing `p` now only
+  takes effect on approved findings; pending and dismissed findings
+  cannot be marked for upstream posting. `GetFindingsMarkedForPost`
+  filters at read time so a finding that was approved-then-dismissed
+  is no longer returned. `DismissCurrent` also clears the post mark
+  so an `a → p → d → a` sequence can no longer silently resurrect a
+  previously-marked finding into the post-bound set. The TUI's
+  `[post]` row badge now consults the same predicate as the post
+  filter, so the badge can never claim a finding is queued when the
+  filter would drop it. (`diffsmith-dvz.2`, post-dvz follow-up)
+- Root command help and canonical docs (security-and-privacy,
+  v1-scope, roadmap, diffsmith-v1-design, prd, confidence-and-
+  validation, implementation-plan, release-plan) reconciled to
+  describe opt-in posting accurately: diffsmith never posts without
+  an explicit per-run `y` confirmation, and `p` now requires a
+  prior `a`. Legacy "never posts" / "no direct posting in v1"
+  claims were dangerously stale for a tool that handles private
+  code. (`diffsmith-dvz.3`)
+- Synthesis injection live smoke (`TestSynthesisInjectionLiveCodex`)
+  broadened to check title, suggested_comment, evidence, and
+  fix_hint against the full canary set. Strict sentinels are
+  checked across all four user-readable fields; soft canaries
+  (plain-English fragments the lead may legitimately quote when
+  narrating the attack) are checked in title only, so responsible
+  defense commentary doesn't false-positive. (`diffsmith-dvz.8`,
+  `diffsmith-e2g`)
+
+### Added
+
+- `--debug` flag on `diffsmith review` (and on the inbox / bare-root
+  flows) expands the post-TUI quarantine section: each rejected
+  candidate is printed with `(file:line)`, title, and the validator's
+  rejection reason. Default-off path keeps the compact
+  `(N quarantined; pass --debug to inspect)` counter, matching what
+  the previous build wrongly promised. (`diffsmith-dvz.6`)
+- `--print-payload` is now host-aware: on a GitHub PR it prints the
+  GraphQL `addPullRequestReviewThread` input as before; on a GitLab
+  MR it prints the discussions API JSON body with `position` fields
+  (base/head/start SHA, position_type, new_path, old_path, new_line).
+  Unknown hosts produce an `unsupported host` error rather than
+  silently defaulting to GitHub. The preview also mirrors
+  submitGitLab's missing-diff-refs guard, so it can no longer claim
+  success where a real submit would fail. (`diffsmith-dvz.5`,
+  `diffsmith-696`, post-dvz follow-up)
+- GitLab posting now respects file renames: `Poster.OldPaths`
+  carries the post-image → pre-image rename map built from the
+  parsed diff, and `submitGitLab` uses it to populate
+  `position.old_path` correctly for renamed-with-hunks files.
+  Same-path files don't need a map entry. GitHub posting is
+  unchanged. (`diffsmith-dvz.4`)
+- `--repost` and `--debug` are now also exposed on `diffsmith inbox`
+  and bare `diffsmith` (no subcommand). Previously each entry point
+  carried a different subset of the post-flow flags, so users had
+  to reach for `diffsmith review` just to bypass dedup or expand
+  quarantined output. A single `registerPostFlowFlags` helper now
+  registers all three on every entry point. (`diffsmith-3e8`)
+
+### Changed
+
+- GitHub PR comment dedup is now keyed by an invisible HTML-comment
+  marker (`<!-- diffsmith -->`) rather than the visible
+  `**diffsmith review**` header. The visible body is now compact:
+  GitHub renders `**[severity] Title**` then the comment; GitLab
+  renders `**severity** (NN%)` then the comment — no more
+  `model: codex,` or `**diffsmith review** —` preamble. Existing
+  diffsmith comments posted by v0.1.5 do NOT carry the new marker,
+  so the first v0.1.6 rerun against a PR/MR with prior comments
+  will re-post them as duplicates (one-shot migration cost).
+  Workaround: pass `--repost` on the first v0.1.6 run, or accept
+  the duplicates and resolve them manually. (`diffsmith-dvz.1`,
+  post-dvz format change)
+- `model.Model` interface split into `model.Reviewer` (base:
+  Name/Preflight/Review) and `model.Synthesizer` (optional:
+  Synthesize). The synthesis call site type-asserts
+  `model.Synthesizer` and surfaces a status message when a
+  candidate doesn't satisfy it, so an experimental/review-only
+  adapter (antigravity) no longer needs to carry a stub
+  `Synthesize` that exists only to satisfy the old composite
+  interface. `model.Model` is kept as a type alias to `Reviewer`
+  for backward compatibility. Compile-time guards
+  (`var _ model.Synthesizer = (*Adapter)(nil)`) on codex, claude,
+  and gemini lock the capability so a future refactor that drops
+  Synthesize fails to build immediately. (`diffsmith-dvz.7`,
+  `diffsmith-0hy`)
+
+### Fixed
+
+- GitHub dedup now recognises its own comments. The body posted by
+  `formatBody` did not start with the `**diffsmith review**` prefix
+  that `fetchExistingGitHubKeys` expected, so dedup silently treated
+  every prior comment as human content and re-posted every finding
+  on every run. Fixed by switching the marker to the invisible
+  HTML-comment form and matching with `strings.Contains` instead of
+  `HasPrefix`; a regression test pins the format-vs-dedup contract
+  using a formatBody-produced body. (`diffsmith-dvz.1`)
+- Synthesis loop no longer silently advances when an adapter returns
+  `(nil, nil)`. `attemptSynthesis` now treats the undefined-shape
+  return as an explicit skip, surfaces it via a PhaseStatusMsg, and
+  appends it to the run summary so the user has a persistent audit
+  trail. Previously the loop's two-branch logic (`if err==nil &&
+  synth!=nil; if err!=nil`) left a third case where nothing fired
+  and `final` stayed as `surviving[0]` under the impression
+  synthesis succeeded. (`diffsmith-4f8`, `diffsmith-wfq`)
+
+### Internal
+
+- Architecture review (epic `diffsmith-dvz`) and the post-review
+  follow-up sweep filed and closed 9 tickets covering trust
+  boundary, dedup contract, host-specific posting, debug surface,
+  interface split, and quality follow-ups.
+
 ## v0.1.5 — 2026-05-26
 
 ### Added
