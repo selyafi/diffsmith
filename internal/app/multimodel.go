@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -23,7 +24,7 @@ type modelOutcome struct {
 // streams ModelStatusMsg updates via send. Returns one modelOutcome
 // per input model after all have completed. Order is non-deterministic
 // (callers should look up by Name).
-func runModelsInParallel(ctx context.Context, models []model.Model, input *review.ReviewInput, send func(tea.Msg)) []modelOutcome {
+func runModelsInParallel(ctx context.Context, models []model.Model, input *review.ReviewInput, send func(tea.Msg), timeout time.Duration) []modelOutcome {
 	if len(models) == 0 {
 		return nil
 	}
@@ -33,8 +34,18 @@ func runModelsInParallel(ctx context.Context, models []model.Model, input *revie
 		wg.Add(1)
 		go func(idx int, m model.Model) {
 			defer wg.Done()
+			// Each model gets its own deadline so one hung reviewer (e.g.
+			// an MCP cold-start) is cancelled and dropped without blocking
+			// the others — the join below waits on every goroutine. A
+			// non-positive timeout disables the cap.
+			runCtx := ctx
+			if timeout > 0 {
+				var cancel context.CancelFunc
+				runCtx, cancel = context.WithTimeout(ctx, timeout)
+				defer cancel()
+			}
 			send(tui.ModelStatusMsg{Name: m.Name(), State: "running"})
-			r, err := m.Review(ctx, input)
+			r, err := m.Review(runCtx, input)
 			if err != nil {
 				send(tui.ModelStatusMsg{Name: m.Name(), State: "failed", Err: err})
 				results[idx] = modelOutcome{Name: m.Name(), Err: err}

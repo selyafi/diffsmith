@@ -30,7 +30,10 @@ type Adapter struct {
 // (the package is internal-only).
 func New(run provider.Runner) *Adapter {
 	if run == nil {
-		run = provider.DefaultRunner
+		// Isolate gemini from the caller's cwd so it can't onboard from a
+		// project AGENTS.md / CLAUDE.md or autoload project MCP config.
+		// diffsmith-4tz.
+		run = provider.IsolatedRunner()
 	}
 	return &Adapter{
 		run:         run,

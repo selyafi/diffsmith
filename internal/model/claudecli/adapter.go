@@ -34,7 +34,9 @@ type Adapter struct {
 // (the package is internal-only).
 func New(run provider.Runner) *Adapter {
 	if run == nil {
-		run = provider.DefaultRunner
+		// Isolate claude from the caller's cwd so it can't autoload a
+		// project CLAUDE.md / .claude config during a review. diffsmith-4tz.
+		run = provider.IsolatedRunner()
 	}
 	return &Adapter{
 		run:         run,
