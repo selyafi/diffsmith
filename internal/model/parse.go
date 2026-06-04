@@ -9,8 +9,10 @@ import (
 )
 
 // ParseError describes why a model's stdout couldn't be parsed.
-// Kind narrows the cause for actionable error messages; Raw is a
-// truncated copy of the offending output for debug surfaces.
+// Kind narrows the cause for actionable error messages; Raw is the FULL
+// offending output, retained untruncated so it can be surfaced for
+// diagnosis (diffsmith-2xy). Error() prints only a bounded snippet of it;
+// callers wanting the whole payload read Raw directly.
 type ParseError struct {
 	Kind  string // "prose_preamble" | "invalid_json" | "wrong_shape"
 	Raw   string
@@ -18,10 +20,18 @@ type ParseError struct {
 }
 
 func (e *ParseError) Error() string {
+	msg := fmt.Sprintf("parse model output (%s)", e.Kind)
 	if e.Cause != nil {
-		return fmt.Sprintf("parse model output (%s): %v", e.Kind, e.Cause)
+		msg += ": " + e.Cause.Error()
 	}
-	return fmt.Sprintf("parse model output (%s)", e.Kind)
+	// Surface a bounded snippet of the raw output. Adapters wrap this
+	// error with %w and the dropped-model run summary prints it with %v,
+	// so without this a model that returned garbage leaves no trace of
+	// what it actually said. The full payload stays on Raw.
+	if e.Raw != "" {
+		msg += fmt.Sprintf(" [raw: %s]", truncate(e.Raw, 200))
+	}
+	return msg
 }
 
 func (e *ParseError) Unwrap() error { return e.Cause }
@@ -41,7 +51,7 @@ func ParseFindings(raw []byte) ([]review.FindingCandidate, error) {
 	trimmed := stripWrapper(string(raw))
 
 	if !strings.HasPrefix(trimmed, "{") {
-		return nil, &ParseError{Kind: "prose_preamble", Raw: truncate(trimmed, 200)}
+		return nil, &ParseError{Kind: "prose_preamble", Raw: trimmed}
 	}
 
 	// Findings is a pointer so we can distinguish "key missing" (nil
@@ -56,14 +66,14 @@ func ParseFindings(raw []byte) ([]review.FindingCandidate, error) {
 	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
 		return nil, &ParseError{
 			Kind:  "invalid_json",
-			Raw:   truncate(trimmed, 200),
+			Raw:   trimmed,
 			Cause: err,
 		}
 	}
 	if envelope.Findings == nil {
 		return nil, &ParseError{
 			Kind: "wrong_shape",
-			Raw:  truncate(trimmed, 200),
+			Raw:  trimmed,
 		}
 	}
 	return *envelope.Findings, nil
