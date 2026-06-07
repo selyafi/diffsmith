@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -63,6 +64,7 @@ func registerPostFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
 // flags (e.g. --max-files) should join here rather than be inlined.
 func registerModelFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
 	cmd.Flags().IntVar(&flags.inputBudget, "input-budget", 0, "override the per-adapter prompt-size cap in bytes (default: 1 MiB per adapter; 0 keeps the default)")
+	cmd.Flags().DurationVar(&flags.modelTimeout, "model-timeout", 10*time.Minute, "per-model wall-clock cap; a model exceeding it is cancelled and dropped from the review (0 disables)")
 }
 
 // renameMapFromFiles extracts the post-image → pre-image rename mapping
@@ -112,6 +114,13 @@ type reviewFlags struct {
 	// int flag) means "leave each adapter's default in place" — see
 	// applyInputBudget for the no-op-on-zero contract.
 	inputBudget int
+	// modelTimeout caps how long each model's Review may run before it is
+	// cancelled and dropped from the review. A reviewer CLI can hang
+	// (e.g. an MCP server cold-start), and because the models run in a
+	// parallel fan-out that joins on all of them, one hang would
+	// otherwise block the whole review. Zero disables the cap (inherit
+	// the parent context only). See runModelsInParallel.
+	modelTimeout time.Duration
 }
 
 func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *cobra.Command {
@@ -250,7 +259,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		}
 
 		send(tui.PhaseStatusMsg("Reviewing with selected models…"))
-		outcomes := runModelsInParallel(ctx, selected.All, input, send)
+		outcomes := runModelsInParallel(ctx, selected.All, input, send, flags.modelTimeout)
 		surviving, dropped := splitOutcomes(outcomes)
 
 		if len(surviving) == 0 {
@@ -279,7 +288,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 					// to bail with "no matching model registered."
 					send(tui.PhaseStatusMsg(fmt.Sprintf("Synthesizing with %s…", candidate.Model)))
 				}
-				synth, skipReason := attemptSynthesis(ctx, leadModel, input, surviving)
+				synth, skipReason := attemptSynthesis(ctx, leadModel, input, surviving, flags.modelTimeout)
 				if skipReason != "" {
 					// Every skip surfaces a reason — including the
 					// (nil, nil) silent-fallback that attemptSynthesis

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/selyafi/diffsmith/internal/model"
 	"github.com/selyafi/diffsmith/internal/review"
@@ -37,12 +38,48 @@ func (s synthFake) Synthesize(context.Context, *review.ReviewInput, []*review.Mo
 	return s.out, s.err
 }
 
+// blockingSynth blocks inside Synthesize until its context is cancelled
+// (then it surfaces ctx.Err()) or fallback elapses (then it "succeeds").
+// Lets a test prove the per-model timeout also guards the synthesis call.
+type blockingSynth struct {
+	name     string
+	fallback time.Duration
+}
+
+func (b blockingSynth) Name() string                    { return b.name }
+func (b blockingSynth) Preflight(context.Context) error { return nil }
+func (b blockingSynth) Review(context.Context, *review.ReviewInput) (*review.ModelReviewResult, error) {
+	return nil, nil
+}
+func (b blockingSynth) Synthesize(ctx context.Context, _ *review.ReviewInput, _ []*review.ModelReviewResult) (*review.ModelReviewResult, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(b.fallback):
+		return &review.ModelReviewResult{Model: b.name}, nil
+	}
+}
+
+// TestAttemptSynthesis_TimesOutAsSkip proves a hung lead model is
+// cancelled by the per-model timeout and surfaced as a skip reason rather
+// than blocking the whole review.
+func TestAttemptSynthesis_TimesOutAsSkip(t *testing.T) {
+	lead := blockingSynth{name: "codex", fallback: 500 * time.Millisecond}
+	got, skip := attemptSynthesis(context.Background(), lead, &review.ReviewInput{}, nil, 20*time.Millisecond)
+	if got != nil {
+		t.Errorf("expected nil result on timeout; got %+v", got)
+	}
+	if skip == "" {
+		t.Error("expected a skip reason when synthesis times out")
+	}
+}
+
 // TestAttemptSynthesis_SuccessReturnsResultNoSkip pins the happy path:
 // when the lead returns (result, nil), attemptSynthesis must return
 // that result and an empty skip reason.
 func TestAttemptSynthesis_SuccessReturnsResultNoSkip(t *testing.T) {
 	want := &review.ModelReviewResult{Model: "codex"}
-	got, skip := attemptSynthesis(context.Background(), synthFake{name: "codex", out: want}, &review.ReviewInput{}, nil)
+	got, skip := attemptSynthesis(context.Background(), synthFake{name: "codex", out: want}, &review.ReviewInput{}, nil, 0)
 	if skip != "" {
 		t.Errorf("happy path must return empty skip; got %q", skip)
 	}
@@ -56,7 +93,7 @@ func TestAttemptSynthesis_SuccessReturnsResultNoSkip(t *testing.T) {
 // advance the loop. attemptSynthesis surfaces a clear skip reason so
 // the caller can log it instead of falling back unannounced.
 func TestAttemptSynthesis_NilNilTreatedAsSkip(t *testing.T) {
-	got, skip := attemptSynthesis(context.Background(), synthFake{name: "codex"}, &review.ReviewInput{}, nil)
+	got, skip := attemptSynthesis(context.Background(), synthFake{name: "codex"}, &review.ReviewInput{}, nil, 0)
 	if got != nil {
 		t.Errorf("got non-nil result %v from (nil, nil); want nil", got)
 	}
@@ -73,7 +110,7 @@ func TestAttemptSynthesis_NilNilTreatedAsSkip(t *testing.T) {
 // TestAttemptSynthesis_ErrorPropagatesAsSkip confirms a Synthesize
 // error becomes a skip with the error text embedded.
 func TestAttemptSynthesis_ErrorPropagatesAsSkip(t *testing.T) {
-	_, skip := attemptSynthesis(context.Background(), synthFake{name: "codex", err: errors.New("budget exceeded")}, &review.ReviewInput{}, nil)
+	_, skip := attemptSynthesis(context.Background(), synthFake{name: "codex", err: errors.New("budget exceeded")}, &review.ReviewInput{}, nil, 0)
 	if !strings.Contains(skip, "budget exceeded") {
 		t.Errorf("skip reason should include the underlying error; got %q", skip)
 	}
@@ -83,7 +120,7 @@ func TestAttemptSynthesis_ErrorPropagatesAsSkip(t *testing.T) {
 // confirms a lead that doesn't satisfy model.Synthesizer is skipped
 // with a reason that names the capability gap.
 func TestAttemptSynthesis_ReviewerOnlyLeadSkipsWithCapabilityReason(t *testing.T) {
-	_, skip := attemptSynthesis(context.Background(), reviewerOnlyFake{name: "agy"}, &review.ReviewInput{}, nil)
+	_, skip := attemptSynthesis(context.Background(), reviewerOnlyFake{name: "agy"}, &review.ReviewInput{}, nil, 0)
 	if !strings.Contains(skip, "Synthesizer") {
 		t.Errorf("skip reason should name the Synthesizer capability gap; got %q", skip)
 	}
@@ -92,7 +129,7 @@ func TestAttemptSynthesis_ReviewerOnlyLeadSkipsWithCapabilityReason(t *testing.T
 // TestAttemptSynthesis_NilLeadSkipsWithRegistryReason confirms a nil
 // lead model (registry miss) is skipped with an explanation.
 func TestAttemptSynthesis_NilLeadSkipsWithRegistryReason(t *testing.T) {
-	_, skip := attemptSynthesis(context.Background(), nil, &review.ReviewInput{}, nil)
+	_, skip := attemptSynthesis(context.Background(), nil, &review.ReviewInput{}, nil, 0)
 	if skip == "" {
 		t.Fatal("nil lead must produce a skip reason; got empty")
 	}

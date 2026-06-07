@@ -45,7 +45,10 @@ type Adapter struct {
 // (the package is internal-only).
 func New(run provider.Runner) *Adapter {
 	if run == nil {
-		run = provider.DefaultRunner
+		// Isolate codex from the caller's cwd so it can't autoload a
+		// project's .agents/skills/ (and possibly activate a skill that
+		// posts comments). diffsmith-4tz.
+		run = provider.IsolatedRunner()
 	}
 	return &Adapter{
 		run:         run,

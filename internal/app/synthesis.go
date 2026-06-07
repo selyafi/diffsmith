@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/selyafi/diffsmith/internal/model"
 	"github.com/selyafi/diffsmith/internal/review"
@@ -25,13 +26,22 @@ import (
 //  4. Synthesize returned (nil, nil) — undefined per the adapter
 //     contract but legal Go. Without this branch the loop would
 //     silently advance; diffsmith-4f8 introduced the explicit check.
-func attemptSynthesis(ctx context.Context, leadModel model.Reviewer, input *review.ReviewInput, surviving []*review.ModelReviewResult) (*review.ModelReviewResult, string) {
+func attemptSynthesis(ctx context.Context, leadModel model.Reviewer, input *review.ReviewInput, surviving []*review.ModelReviewResult, timeout time.Duration) (*review.ModelReviewResult, string) {
 	if leadModel == nil {
 		return nil, "no matching model registered in the picker selection"
 	}
 	leadSynth, ok := leadModel.(model.Synthesizer)
 	if !ok {
 		return nil, "model does not implement the Synthesizer capability"
+	}
+	// Cap the lead model the same way the parallel reviewers are capped:
+	// a hung synthesis CLI must not block the whole review. A non-positive
+	// timeout disables the cap. A deadline surfaces as a skip reason via
+	// the err path below — never a silent fallback.
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 	synth, err := leadSynth.Synthesize(ctx, input, surviving)
 	if err != nil {
