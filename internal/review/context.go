@@ -25,6 +25,9 @@ func (in *ReviewInput) CapContext() []string {
 
 	if n := len(in.Description); n > MaxDescriptionBytes {
 		in.Description = truncateUTF8(in.Description, MaxDescriptionBytes)
+		// len(in.Description) after truncation may be slightly below
+		// MaxDescriptionBytes when the rune-boundary back-off trimmed a
+		// partial rune; the note reports the actual capped size.
 		notes = append(notes, fmt.Sprintf("description truncated from %d to %d bytes", n, len(in.Description)))
 	}
 

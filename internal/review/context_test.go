@@ -55,13 +55,48 @@ func TestCapContextNoNotesWhenWithinLimits(t *testing.T) {
 }
 
 func TestTruncateUTF8DoesNotSplitRune(t *testing.T) {
-	// "世" is 3 bytes; cutting at 4 bytes must back off to a rune boundary.
-	s := strings.Repeat("世", 3) // 9 bytes
-	got := truncateUTF8(s, 4)
-	if !utf8.ValidString(got) {
-		t.Errorf("truncateUTF8 split a rune: %q is not valid UTF-8", got)
+	cases := []struct {
+		name string
+		s    string
+		max  int
+	}{
+		// "世" is 3 bytes; cutting at 4 must back off to a rune boundary.
+		{"3-byte rune", strings.Repeat("世", 3), 4},
+		// "🙂" is 4 bytes; cutting at 5 must back off to a rune boundary.
+		{"4-byte rune (emoji)", strings.Repeat("🙂", 3), 5},
 	}
-	if len(got) > 4 {
-		t.Errorf("truncateUTF8 exceeded max: got %d bytes", len(got))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncateUTF8(tc.s, tc.max)
+			if !utf8.ValidString(got) {
+				t.Errorf("truncateUTF8 split a rune: %q is not valid UTF-8", got)
+			}
+			if len(got) > tc.max {
+				t.Errorf("truncateUTF8 exceeded max: got %d bytes, want <= %d", len(got), tc.max)
+			}
+		})
+	}
+}
+
+func TestTruncateUTF8MalformedInput(t *testing.T) {
+	// All continuation bytes: the rune-boundary back-off trims to "".
+	// Documents that truncateUTF8 prefers a valid (empty) result over
+	// emitting a partial/invalid rune for malformed input.
+	if got := truncateUTF8("\x80\x81\x82\x83", 3); got != "" {
+		t.Errorf("malformed input: got %q, want empty string", got)
+	}
+}
+
+func TestCapContextKeepsExactlyMaxIssues(t *testing.T) {
+	in := &ReviewInput{}
+	for i := 0; i < MaxLinkedIssues; i++ {
+		in.AcceptanceCriteria = append(in.AcceptanceCriteria, IssueContext{Number: i})
+	}
+	notes := in.CapContext()
+	if len(in.AcceptanceCriteria) != MaxLinkedIssues {
+		t.Errorf("exactly MaxLinkedIssues must be kept, got %d", len(in.AcceptanceCriteria))
+	}
+	if len(notes) != 0 {
+		t.Errorf("no drop note expected at exactly the cap, got %v", notes)
 	}
 }
