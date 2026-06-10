@@ -73,7 +73,7 @@ func TestAdapterFetchHappyPath(t *testing.T) {
 	if len(*calls) != 2 {
 		t.Fatalf("call count: got %d, want 2", len(*calls))
 	}
-	wantView := []string{"pr", "view", "https://github.com/owner/repo/pull/42", "--json", "title,author,headRefName,headRefOid,baseRefName,url"}
+	wantView := []string{"pr", "view", "https://github.com/owner/repo/pull/42", "--json", "title,author,body,headRefName,headRefOid,baseRefName,url"}
 	if (*calls)[0].name != "gh" || !reflect.DeepEqual((*calls)[0].args, wantView) {
 		t.Errorf("view call: got %s %v, want gh %v", (*calls)[0].name, (*calls)[0].args, wantView)
 	}
@@ -113,6 +113,141 @@ func TestAdapterFetchHappyPath(t *testing.T) {
 	}
 	if len(input.Files) != 1 || firstPath != "auth/session.go" {
 		t.Errorf("Files: got %d files, first path %q; want 1 file, auth/session.go", len(input.Files), firstPath)
+	}
+}
+
+// TestAdapterFetch_PopulatesDescription is diffsmith-144: Fetch must
+// capture the PR body into ReviewInput.Description and request it in the
+// gh pr view --json field set (free — same call).
+func TestAdapterFetch_PopulatesDescription(t *testing.T) {
+	metaJSON := []byte(`{
+		"title": "Tighten token parsing",
+		"author": {"login": "alice"},
+		"headRefName": "feat/parse",
+		"headRefOid": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"baseRefName": "main",
+		"url": "https://github.com/owner/repo/pull/42",
+		"body": "Implements the widget.\n\nCloses #7"
+	}`)
+	rawDiff := readDiffFixture(t, "modified_simple.diff")
+	run, calls := scriptedRunner(t, [][]byte{metaJSON, rawDiff})
+	a := New(run)
+
+	input, err := a.Fetch(context.Background(), "https://github.com/owner/repo/pull/42")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if want := "Implements the widget.\n\nCloses #7"; input.Description != want {
+		t.Errorf("Description = %q, want %q", input.Description, want)
+	}
+	// Production must actually request the body field.
+	if !strings.Contains(strings.Join((*calls)[0].args, " "), "body") {
+		t.Errorf("gh pr view must request 'body' in --json; got args %v", (*calls)[0].args)
+	}
+}
+
+// linkedIssuesTarget is the PR target used by the FetchLinkedIssues tests.
+func linkedIssuesTarget() review.ReviewTarget {
+	return review.ReviewTarget{
+		Host:   review.HostGitHub,
+		URL:    "https://github.com/owner/repo/pull/42",
+		Owner:  "owner",
+		Repo:   "repo",
+		Number: 42,
+	}
+}
+
+// TestFetchLinkedIssues_ResolvesClosingRefs is diffsmith-144: the GitHub
+// adapter resolves the issues a PR closes (closingIssuesReferences) and
+// fetches each issue's title/body via `gh issue view`.
+func TestFetchLinkedIssues_ResolvesClosingRefs(t *testing.T) {
+	refsJSON := []byte(`{"closingIssuesReferences":[
+		{"number":7,"url":"https://github.com/owner/repo/issues/7","repository":{"name":"repo","owner":{"login":"owner"}}},
+		{"number":9,"url":"https://github.com/owner/repo/issues/9","repository":{"name":"repo","owner":{"login":"owner"}}}
+	]}`)
+	issue7 := []byte(`{"number":7,"title":"Widget","body":"AC: it widgets","url":"https://github.com/owner/repo/issues/7"}`)
+	issue9 := []byte(`{"number":9,"title":"Gadget","body":"AC: it gadgets","url":"https://github.com/owner/repo/issues/9"}`)
+	run, calls := scriptedRunner(t, [][]byte{refsJSON, issue7, issue9})
+	a := New(run)
+
+	issues, notes, err := a.FetchLinkedIssues(context.Background(), linkedIssuesTarget())
+	if err != nil {
+		t.Fatalf("FetchLinkedIssues: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("want 2 issues, got %d", len(issues))
+	}
+	if issues[0].Number != 7 || issues[0].Title != "Widget" || !strings.Contains(issues[0].Body, "widgets") {
+		t.Errorf("issue[0] decoded wrong: %+v", issues[0])
+	}
+	if len(notes) != 0 {
+		t.Errorf("no notes expected on clean resolution; got %v", notes)
+	}
+	// First call resolves the closing refs; subsequent calls read issues.
+	if !strings.Contains(strings.Join((*calls)[0].args, " "), "closingIssuesReferences") {
+		t.Errorf("first call should query closingIssuesReferences; got %v", (*calls)[0].args)
+	}
+	if (*calls)[1].args[0] != "issue" || (*calls)[1].args[1] != "view" {
+		t.Errorf("second call should be `gh issue view`; got %v", (*calls)[1].args)
+	}
+}
+
+// TestFetchLinkedIssues_DropsFailingIssueWithNote: a per-issue fetch
+// failure is non-fatal — the issue is dropped and a note is surfaced, the
+// rest still resolve. (No silent fallback.)
+func TestFetchLinkedIssues_DropsFailingIssueWithNote(t *testing.T) {
+	refsJSON := []byte(`{"closingIssuesReferences":[
+		{"number":7,"url":"u7","repository":{"name":"repo","owner":{"login":"owner"}}},
+		{"number":9,"url":"u9","repository":{"name":"repo","owner":{"login":"owner"}}}
+	]}`)
+	issue7 := []byte(`{"number":7,"title":"Widget","body":"b","url":"u7"}`)
+	run, _ := scriptedRunnerSeq(t, []scriptedResponse{
+		{out: refsJSON},
+		{out: issue7},
+		{err: errors.New("HTTP 404: Not Found")},
+	})
+	a := New(run)
+
+	issues, notes, err := a.FetchLinkedIssues(context.Background(), linkedIssuesTarget())
+	if err != nil {
+		t.Fatalf("per-issue failure must be non-fatal; got err %v", err)
+	}
+	if len(issues) != 1 || issues[0].Number != 7 {
+		t.Fatalf("want only issue #7 surviving; got %+v", issues)
+	}
+	if len(notes) == 0 {
+		t.Error("a dropped issue must produce a surfaced note")
+	}
+}
+
+// TestFetchLinkedIssues_TotalFailureReturnsError: if the closing-refs
+// query itself fails, that's a total failure surfaced as err (the caller
+// turns it into one note and proceeds with no criteria).
+func TestFetchLinkedIssues_TotalFailureReturnsError(t *testing.T) {
+	run, _ := scriptedRunnerSeq(t, []scriptedResponse{{err: errors.New("gh exploded")}})
+	a := New(run)
+
+	_, _, err := a.FetchLinkedIssues(context.Background(), linkedIssuesTarget())
+	if err == nil {
+		t.Fatal("a failed closingIssuesReferences query must return err")
+	}
+}
+
+// TestFetchLinkedIssues_NoRefsIsEmpty: a PR that closes no issues yields
+// empty criteria with no error and no extra calls.
+func TestFetchLinkedIssues_NoRefsIsEmpty(t *testing.T) {
+	run, calls := scriptedRunner(t, [][]byte{[]byte(`{"closingIssuesReferences":[]}`)})
+	a := New(run)
+
+	issues, notes, err := a.FetchLinkedIssues(context.Background(), linkedIssuesTarget())
+	if err != nil {
+		t.Fatalf("no refs should not error: %v", err)
+	}
+	if len(issues) != 0 || len(notes) != 0 {
+		t.Errorf("expected no issues/notes; got %d issues, notes %v", len(issues), notes)
+	}
+	if len(*calls) != 1 {
+		t.Errorf("no issues to fetch → only the refs call; got %d calls", len(*calls))
 	}
 }
 

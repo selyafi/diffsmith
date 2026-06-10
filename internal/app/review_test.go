@@ -854,6 +854,9 @@ index 1111111..2222222 100644
 			return []byte(mrJSON), nil
 		case reflect.DeepEqual(args, []string{"mr", "diff", "42", "-R", "https://gitlab.com/group/project", "--raw", "--color", "never"}):
 			return []byte(synthDiff), nil
+		case reflect.DeepEqual(args, []string{"api", "projects/group%2Fproject/merge_requests/42/closes_issues", "--hostname", "gitlab.com"}):
+			// diffsmith-144 context enrichment: no linked issues for this MR.
+			return []byte(`[]`), nil
 		default:
 			t.Fatalf("unexpected runner call: glab %v", args)
 			return nil, nil
@@ -874,10 +877,10 @@ index 1111111..2222222 100644
 		t.Fatalf("Execute: %v", err)
 	}
 
-	// Exactly 3 runner invocations: auth-status, mr view, mr diff (no
-	// duplicates, no missing).
-	if got, want := len(calls), 3; got != want {
-		t.Errorf("runner call count: got %d, want %d (auth+view+diff). Calls:\n%v", got, want, calls)
+	// Exactly 4 runner invocations: auth-status, mr view, mr diff, and the
+	// diffsmith-144 closes_issues context fetch (no duplicates, no missing).
+	if got, want := len(calls), 4; got != want {
+		t.Errorf("runner call count: got %d, want %d (auth+view+diff+closes_issues). Calls:\n%v", got, want, calls)
 	}
 
 	got := buf.String()

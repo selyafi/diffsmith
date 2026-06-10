@@ -65,6 +65,7 @@ func registerPostFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
 func registerModelFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
 	cmd.Flags().IntVar(&flags.inputBudget, "input-budget", 0, "override the per-adapter prompt-size cap in bytes (default: 1 MiB per adapter; 0 keeps the default)")
 	cmd.Flags().DurationVar(&flags.modelTimeout, "model-timeout", 10*time.Minute, "per-model wall-clock cap; a model exceeding it is cancelled and dropped from the review (0 disables)")
+	cmd.Flags().BoolVar(&flags.noContext, "no-context", false, "do not send the PR/MR description or fetch linked-issue acceptance criteria to the model (diff-only review)")
 }
 
 // renameMapFromFiles extracts the post-image → pre-image rename mapping
@@ -114,6 +115,11 @@ type reviewFlags struct {
 	// int flag) means "leave each adapter's default in place" — see
 	// applyInputBudget for the no-op-on-zero contract.
 	inputBudget int
+	// noContext disables diffsmith-144 context enrichment: when set, the
+	// PR/MR description is withheld from the prompt and linked-issue
+	// acceptance criteria are not fetched. Default (false) sends the
+	// description and resolves acceptance criteria.
+	noContext bool
 	// modelTimeout caps how long each model's Review may run before it is
 	// cancelled and dropped from the review. A reviewer CLI can hang
 	// (e.g. an MCP server cold-start), and because the models run in a
@@ -192,6 +198,13 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		if err != nil {
 			return err
 		}
+		// Enrich so --print-prompt reflects exactly what the model will
+		// see (the # Intent section), and --no-context is honored here
+		// too. Notes go to stderr to keep stdout a clean prompt/diff.
+		fetcher, _ := p.(review.LinkedIssueFetcher)
+		for _, n := range enrichWithContext(ctx, fetcher, input, flags.noContext) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "diffsmith: %s\n", n)
+		}
 		if flags.printPrompt {
 			if _, err := io.WriteString(cmd.OutOrStdout(), model.BuildPrompt(input)); err != nil {
 				return err
@@ -258,6 +271,15 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 			return
 		}
 
+		// diffsmith-144: enrich with the PR/MR description + linked-issue
+		// acceptance criteria (gated by --no-context). Never fatal — any
+		// failure becomes a surfaced note and the review proceeds.
+		fetcher, _ := p.(review.LinkedIssueFetcher)
+		if !flags.noContext {
+			send(tui.PhaseStatusMsg("Fetching PR/issue context…"))
+		}
+		contextNotes := enrichWithContext(ctx, fetcher, input, flags.noContext)
+
 		send(tui.PhaseStatusMsg("Reviewing with selected models…"))
 		outcomes := runModelsInParallel(ctx, selected.All, input, send, flags.modelTimeout)
 		surviving, dropped := splitOutcomes(outcomes)
@@ -310,7 +332,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		idx := diff.NewIndex(input.Files)
 		valid, quarantined := review.Validate(final.Findings, final.Model, idx)
 
-		runSummary = buildRunSummary(selected.All, surviving, dropped, synthesisLeadName, len(final.Findings), synthesisSkips)
+		runSummary = buildRunSummary(selected.All, surviving, dropped, synthesisLeadName, len(final.Findings), synthesisSkips, contextNotes)
 		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined})
 	}
 	if err := runTUI(loader, pipeline); err != nil {
@@ -382,7 +404,7 @@ func confirmPost(cmd *cobra.Command, n int, target review.ReviewTarget) bool {
 // candidates, the skip reasons are appended to the summary so the
 // user has a persistent audit trail instead of relying on transient
 // PhaseStatusMsg flashes (diffsmith-wfq).
-func buildRunSummary(selectedAll []model.Model, surviving []*review.ModelReviewResult, dropped []modelOutcome, synthesisLead string, finalCount int, synthesisSkips []string) string {
+func buildRunSummary(selectedAll []model.Model, surviving []*review.ModelReviewResult, dropped []modelOutcome, synthesisLead string, finalCount int, synthesisSkips []string, contextNotes []string) string {
 	if len(selectedAll) == 0 && len(surviving) == 0 {
 		// Tests can pass nil selectedAll if they only care about the
 		// surviving+skips shape. Production always passes a non-nil
@@ -401,21 +423,29 @@ func buildRunSummary(selectedAll []model.Model, surviving []*review.ModelReviewR
 	}
 	prefix := "Models: " + strings.Join(parts, ", ")
 
+	var summary string
 	switch {
 	case len(surviving) == 1:
-		return prefix + "."
+		summary = prefix + "."
 	case synthesisLead != "":
-		return fmt.Sprintf("%s → synthesized via %s into %d findings.", prefix, synthesisLead, finalCount)
+		summary = fmt.Sprintf("%s → synthesized via %s into %d findings.", prefix, synthesisLead, finalCount)
 	case len(surviving) >= 2:
 		// Synthesis was attempted but all attempts failed; using surviving[0].
-		base := fmt.Sprintf("%s; synthesis failed → using %s (%d findings).", prefix, surviving[0].Model, finalCount)
+		summary = fmt.Sprintf("%s; synthesis failed → using %s (%d findings).", prefix, surviving[0].Model, finalCount)
 		if len(synthesisSkips) > 0 {
-			base += "\n  Synthesis skips: " + strings.Join(synthesisSkips, "; ")
+			summary += "\n  Synthesis skips: " + strings.Join(synthesisSkips, "; ")
 		}
-		return base
 	default:
-		return prefix + "."
+		summary = prefix + "."
 	}
+
+	// Context enrichment notes (diffsmith-144) are surfaced regardless of
+	// the synthesis path so a dropped/truncated description or acceptance
+	// criterion is never silently lost.
+	if len(contextNotes) > 0 {
+		summary += "\n  Context: " + strings.Join(contextNotes, "; ")
+	}
+	return summary
 }
 
 // findModelByName looks up a Model in the slice by its Name() string.

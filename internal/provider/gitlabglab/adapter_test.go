@@ -185,6 +185,119 @@ func TestAdapterFetchHappyPathNestedGroup(t *testing.T) {
 	}
 }
 
+// TestAdapterFetch_PopulatesDescription is diffsmith-144: Fetch must
+// capture the MR description (already present in the glab mr view JSON,
+// previously discarded) into ReviewInput.Description.
+func TestAdapterFetch_PopulatesDescription(t *testing.T) {
+	meta := []byte(`{
+		"title": "Pin context",
+		"author": {"username": "alice"},
+		"source_branch": "feat/ctx",
+		"target_branch": "main",
+		"sha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"web_url": "https://gitlab.com/group/project/-/merge_requests/42",
+		"description": "Implements the widget.\n\nCloses #7"
+	}`)
+	run, _ := scriptedRunner(t, []scriptResult{{out: meta}, {out: readDiffFixture(t)}})
+	a := New(run)
+
+	input, err := a.Fetch(context.Background(),
+		"https://gitlab.com/group/project/-/merge_requests/42")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if want := "Implements the widget.\n\nCloses #7"; input.Description != want {
+		t.Errorf("Description = %q, want %q", input.Description, want)
+	}
+}
+
+func linkedIssuesTarget() review.ReviewTarget {
+	return review.ReviewTarget{
+		Host:   review.HostGitLab,
+		URL:    "https://gitlab.com/group/project/-/merge_requests/42",
+		Owner:  "group",
+		Repo:   "project",
+		Number: 42,
+	}
+}
+
+// TestFetchLinkedIssues_ResolvesClosesIssues is diffsmith-144: the GitLab
+// adapter resolves the MR's closing issues via the closes_issues API,
+// which returns title + description + web_url in a single call.
+func TestFetchLinkedIssues_ResolvesClosesIssues(t *testing.T) {
+	resp := []byte(`[
+		{"iid":7,"title":"Widget","description":"AC: it widgets","web_url":"https://gitlab.com/group/project/-/issues/7"},
+		{"iid":9,"title":"Gadget","description":"AC: it gadgets","web_url":"https://gitlab.com/group/project/-/issues/9"}
+	]`)
+	run, calls := scriptedRunner(t, []scriptResult{{out: resp}})
+	a := New(run)
+
+	issues, notes, err := a.FetchLinkedIssues(context.Background(), linkedIssuesTarget())
+	if err != nil {
+		t.Fatalf("FetchLinkedIssues: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("want 2 issues, got %d", len(issues))
+	}
+	if issues[0].Number != 7 || issues[0].Title != "Widget" || !strings.Contains(issues[0].Body, "widgets") || issues[0].URL == "" {
+		t.Errorf("issue[0] decoded wrong: %+v", issues[0])
+	}
+	if len(notes) != 0 {
+		t.Errorf("no notes expected (single call); got %v", notes)
+	}
+	want := []string{"api", "projects/group%2Fproject/merge_requests/42/closes_issues", "--hostname", "gitlab.com"}
+	if (*calls)[0].name != "glab" || !reflect.DeepEqual((*calls)[0].args, want) {
+		t.Errorf("call: got %s %v, want glab %v", (*calls)[0].name, (*calls)[0].args, want)
+	}
+}
+
+// TestFetchLinkedIssues_EncodesNestedProjectPath verifies the project path
+// is URL-encoded (slashes → %2F) so nested groups resolve correctly.
+func TestFetchLinkedIssues_EncodesNestedProjectPath(t *testing.T) {
+	run, calls := scriptedRunner(t, []scriptResult{{out: []byte(`[]`)}})
+	a := New(run)
+	target := review.ReviewTarget{
+		Host:   review.HostGitLab,
+		URL:    "https://gitlab.com/group/sub/project/-/merge_requests/9001",
+		Owner:  "group/sub",
+		Repo:   "project",
+		Number: 9001,
+	}
+	if _, _, err := a.FetchLinkedIssues(context.Background(), target); err != nil {
+		t.Fatalf("FetchLinkedIssues: %v", err)
+	}
+	want := "projects/group%2Fsub%2Fproject/merge_requests/9001/closes_issues"
+	if (*calls)[0].args[1] != want {
+		t.Errorf("api path: got %q, want %q", (*calls)[0].args[1], want)
+	}
+}
+
+// TestFetchLinkedIssues_TotalFailureReturnsError: a failed closes_issues
+// query is total — returned as err for the caller to surface as one note.
+func TestFetchLinkedIssues_TotalFailureReturnsError(t *testing.T) {
+	run, _ := scriptedRunner(t, []scriptResult{{err: errors.New("glab api exploded")}})
+	a := New(run)
+
+	if _, _, err := a.FetchLinkedIssues(context.Background(), linkedIssuesTarget()); err == nil {
+		t.Fatal("a failed closes_issues query must return err")
+	}
+}
+
+// TestFetchLinkedIssues_NoIssuesIsEmpty: an MR that closes no issues yields
+// empty criteria with no error.
+func TestFetchLinkedIssues_NoIssuesIsEmpty(t *testing.T) {
+	run, _ := scriptedRunner(t, []scriptResult{{out: []byte(`[]`)}})
+	a := New(run)
+
+	issues, notes, err := a.FetchLinkedIssues(context.Background(), linkedIssuesTarget())
+	if err != nil {
+		t.Fatalf("no issues should not error: %v", err)
+	}
+	if len(issues) != 0 || len(notes) != 0 {
+		t.Errorf("expected empty; got %d issues, notes %v", len(issues), notes)
+	}
+}
+
 func TestAdapterFetchRejectsNonGitLabURL(t *testing.T) {
 	run := func(context.Context, io.Reader, string, ...string) ([]byte, error) {
 		t.Fatal("runner must not be invoked when URL parsing fails")

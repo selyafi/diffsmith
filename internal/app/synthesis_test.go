@@ -153,7 +153,7 @@ func TestBuildRunSummary_IncludesSkipReasonsWhenSynthesisFails(t *testing.T) {
 		"codex: synthesis failed: budget exceeded",
 		"claude: synthesis returned (nil, nil) — adapter must return either a non-nil result or an error",
 	}
-	got := buildRunSummary(nil, surviving, nil, "", 5, skips)
+	got := buildRunSummary(nil, surviving, nil, "", 5, skips, nil)
 	if !strings.Contains(got, "budget exceeded") {
 		t.Errorf("summary must include codex's skip reason; got:\n%s", got)
 	}
@@ -174,7 +174,7 @@ func TestBuildRunSummary_OmitsSkipReasonsOnSynthesisSuccess(t *testing.T) {
 	// lead. The failed-first reason is interesting but the success
 	// is what the user cares about; don't dump the noise.
 	skips := []string{"codex: synthesis failed: budget exceeded"}
-	got := buildRunSummary(nil, surviving, nil, "claude", 4, skips)
+	got := buildRunSummary(nil, surviving, nil, "claude", 4, skips, nil)
 	if !strings.Contains(got, "synthesized via claude") {
 		t.Errorf("summary must report successful synthesis; got:\n%s", got)
 	}

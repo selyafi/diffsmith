@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,11 +97,88 @@ func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*review.ReviewInput
 			HeadSHA: meta.HeadRefOid,
 			BaseRef: meta.BaseRefName,
 		},
-		Title:   meta.Title,
-		Author:  meta.Author.Login,
-		Files:   files,
-		RawDiff: string(rawDiff),
+		Title:       meta.Title,
+		Author:      meta.Author.Login,
+		Description: meta.Body,
+		Files:       files,
+		RawDiff:     string(rawDiff),
 	}, nil
+}
+
+// ghClosingRefs mirrors `gh pr view --json closingIssuesReferences`. The
+// refs carry only number/url/repository (no title/body — see the
+// gh-closing-issues-refs-shape note), so each issue body is fetched
+// separately by FetchLinkedIssues.
+type ghClosingRefs struct {
+	ClosingIssuesReferences []struct {
+		Number     int    `json:"number"`
+		URL        string `json:"url"`
+		Repository struct {
+			Name  string `json:"name"`
+			Owner struct {
+				Login string `json:"login"`
+			} `json:"owner"`
+		} `json:"repository"`
+	} `json:"closingIssuesReferences"`
+}
+
+// ghIssue mirrors `gh issue view <n> --json number,title,body,url`.
+type ghIssue struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	URL    string `json:"url"`
+}
+
+// FetchLinkedIssues resolves the issues this PR formally closes
+// (closingIssuesReferences) and reads each one's title/body via
+// `gh issue view`. diffsmith-144.
+//
+// Failure contract (review.LinkedIssueFetcher): a failure of the
+// closing-refs query is total (returned as err — the caller surfaces it
+// as one note and proceeds with no criteria); a failure on an individual
+// issue is non-fatal (the issue is dropped and a note is appended), so one
+// inaccessible cross-repo issue can't sink the rest.
+func (a *Adapter) FetchLinkedIssues(ctx context.Context, target review.ReviewTarget) ([]review.IssueContext, []string, error) {
+	out, err := a.run(ctx, nil, "gh", "pr", "view", target.URL, "--json", "closingIssuesReferences")
+	if err != nil {
+		return nil, nil, fmt.Errorf("gh pr view closingIssuesReferences: %w", err)
+	}
+	var refs ghClosingRefs
+	if err := json.Unmarshal(out, &refs); err != nil {
+		return nil, nil, fmt.Errorf("decode closingIssuesReferences JSON: %w", err)
+	}
+
+	var issues []review.IssueContext
+	var notes []string
+	for _, r := range refs.ClosingIssuesReferences {
+		owner, name := r.Repository.Owner.Login, r.Repository.Name
+		if owner == "" {
+			owner = target.Owner
+		}
+		if name == "" {
+			name = target.Repo
+		}
+		repo := owner + "/" + name
+
+		iout, ierr := a.run(ctx, nil, "gh", "issue", "view", strconv.Itoa(r.Number), "--repo", repo, "--json", "number,title,body,url")
+		if ierr != nil {
+			notes = append(notes, fmt.Sprintf("linked issue %s#%d: fetch failed: %v", repo, r.Number, ierr))
+			continue
+		}
+		var iss ghIssue
+		if jerr := json.Unmarshal(iout, &iss); jerr != nil {
+			notes = append(notes, fmt.Sprintf("linked issue %s#%d: decode failed: %v", repo, r.Number, jerr))
+			continue
+		}
+		issues = append(issues, review.IssueContext{
+			Number: iss.Number,
+			Title:  iss.Title,
+			Body:   iss.Body,
+			URL:    iss.URL,
+		})
+	}
+	return issues, notes, nil
 }
 
 // ghMetadata mirrors the JSON shape returned by `gh pr view --json …`.
@@ -111,6 +189,7 @@ type ghMetadata struct {
 	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
+	Body        string `json:"body"`
 	HeadRefName string `json:"headRefName"`
 	HeadRefOid  string `json:"headRefOid"`
 	BaseRefName string `json:"baseRefName"`
@@ -118,7 +197,7 @@ type ghMetadata struct {
 }
 
 func (a *Adapter) fetchMetadata(ctx context.Context, prURL string) (*ghMetadata, error) {
-	out, err := a.run(ctx, nil, "gh", "pr", "view", prURL, "--json", "title,author,headRefName,headRefOid,baseRefName,url")
+	out, err := a.run(ctx, nil, "gh", "pr", "view", prURL, "--json", "title,author,body,headRefName,headRefOid,baseRefName,url")
 	if err != nil {
 		return nil, fmt.Errorf("gh pr view: %w", err)
 	}
@@ -234,6 +313,10 @@ func writeReassembledFile(b *strings.Builder, f ghPullFile) {
 		b.WriteByte('\n')
 	}
 }
+
+// Compile-time guard: the GitHub adapter provides acceptance-criteria
+// enrichment (diffsmith-144). The app type-asserts to this capability.
+var _ review.LinkedIssueFetcher = (*Adapter)(nil)
 
 // PreflightList verifies gh is authenticated before listing PRs.
 func (a *Adapter) PreflightList(ctx context.Context) error {

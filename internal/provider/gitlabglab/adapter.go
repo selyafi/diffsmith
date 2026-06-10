@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -97,10 +98,11 @@ func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*review.ReviewInput
 			BaseSHA:  meta.DiffRefs.BaseSHA,
 			StartSHA: meta.DiffRefs.StartSHA,
 		},
-		Title:   meta.Title,
-		Author:  meta.Author.Username,
-		Files:   files,
-		RawDiff: string(rawDiff),
+		Title:       meta.Title,
+		Author:      meta.Author.Username,
+		Description: meta.Description,
+		Files:       files,
+		RawDiff:     string(rawDiff),
 	}, nil
 }
 
@@ -116,6 +118,7 @@ type mrMetadata struct {
 	Author struct {
 		Username string `json:"username"`
 	} `json:"author"`
+	Description  string `json:"description"`
 	SourceBranch string `json:"source_branch"`
 	TargetBranch string `json:"target_branch"`
 	SHA          string `json:"sha"`
@@ -143,6 +146,73 @@ func (a *Adapter) fetchMetadata(ctx context.Context, ref *MergeRequestRef) (*mrM
 	return &m, nil
 }
 
+// glabClosesIssue mirrors one entry of GitLab's
+// GET /projects/:id/merge_requests/:iid/closes_issues response. Unlike
+// GitHub's closing refs, this payload already carries the issue title and
+// description, so no per-issue follow-up call is needed.
+type glabClosesIssue struct {
+	IID         int    `json:"iid"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	WebURL      string `json:"web_url"`
+}
+
+// FetchLinkedIssues resolves the issues this MR closes via the
+// closes_issues API. diffsmith-144.
+//
+// One call returns title + description for every closing issue, so there
+// is no per-issue failure mode: a failure of the single API call is total
+// (returned as err for the caller to surface as one note and proceed with
+// no criteria), matching review.LinkedIssueFetcher's contract.
+func (a *Adapter) FetchLinkedIssues(ctx context.Context, target review.ReviewTarget) ([]review.IssueContext, []string, error) {
+	projectPath := url.PathEscape(target.Owner + "/" + target.Repo)
+	apiPath := fmt.Sprintf("projects/%s/merge_requests/%d/closes_issues", projectPath, target.Number)
+	args := []string{"api", apiPath}
+	if host := hostnameFromURL(target.URL); host != "" {
+		args = append(args, "--hostname", host)
+	}
+
+	out, err := a.run(ctx, nil, "glab", args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("glab api closes_issues: %w", err)
+	}
+	// glab can prefix warnings before the JSON payload (see List); trim to
+	// the opening bracket so a stray preamble line doesn't break unmarshal.
+	if i := bytes.IndexByte(out, '['); i > 0 {
+		out = out[i:]
+	}
+	var raw []glabClosesIssue
+	if err := json.Unmarshal(out, &raw); err != nil {
+		preview := string(out)
+		if len(preview) > 200 {
+			preview = preview[:200] + "…"
+		}
+		return nil, nil, fmt.Errorf("decode closes_issues JSON: %w (raw: %s)", err, preview)
+	}
+	issues := make([]review.IssueContext, 0, len(raw))
+	for _, r := range raw {
+		issues = append(issues, review.IssueContext{
+			Number: r.IID,
+			Title:  r.Title,
+			Body:   r.Description,
+			URL:    r.WebURL,
+		})
+	}
+	return issues, nil, nil
+}
+
+// hostnameFromURL extracts the host from an MR URL so `glab api` targets
+// the right GitLab instance (self-hosted as well as gitlab.com). Returns
+// "" if the URL can't be parsed, in which case glab falls back to its
+// default host resolution.
+func hostnameFromURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
 // splitProjectPath splits "group/project" or "group/sub/project" into
 // (owner, repo) at the LAST slash. The owner half preserves namespace
 // depth for nested groups; the repo half is the leaf project. ParseURL
@@ -151,6 +221,10 @@ func splitProjectPath(p string) (owner, repo string) {
 	i := strings.LastIndex(p, "/")
 	return p[:i], p[i+1:]
 }
+
+// Compile-time guard: the GitLab adapter provides acceptance-criteria
+// enrichment (diffsmith-144). The app type-asserts to this capability.
+var _ review.LinkedIssueFetcher = (*Adapter)(nil)
 
 // PreflightList verifies glab is authenticated before listing MRs.
 func (a *Adapter) PreflightList(ctx context.Context) error {
