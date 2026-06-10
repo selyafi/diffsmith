@@ -33,6 +33,8 @@ diffsmith                                          # inbox: pick from your repo'
 
 At startup, diffsmith probes which AI CLIs are installed (`codex`, `claude`, `gemini`) and shows an interactive picker. Any subset can be selected; their findings are merged by a synthesis pass via the highest-priority surviving model (priority order: codex → claude → gemini). `antigravity` (CLI binary: `agy`) is registered but disabled in v1 because the CLI has no non-interactive auth path; see `internal/model/antigravitycli/doc.go`.
 
+To sharpen findings, diffsmith also sends the PR/MR description and the acceptance criteria from any issues the PR/MR formally closes (resolved via `gh`/`glab`) so reviewers can flag scope drift and unmet criteria. This is on by default; pass `--no-context` for a diff-only review that withholds the description and skips the linked-issue fetch. Context fetching is never a gate — if it fails, the review proceeds and the reason is surfaced in the run summary.
+
 After review, `p` in the TUI marks findings for upstream posting. On quit, diffsmith asks for explicit `y` confirmation, then posts approved findings as inline review threads on the PR/MR. Findings whose `(file, line)` already has a diffsmith thread upstream are skipped with a summary line; pass `--repost` to bypass that dedup gate.
 
 ## Install
