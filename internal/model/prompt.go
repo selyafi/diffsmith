@@ -79,7 +79,10 @@ func BuildPrompt(input *review.ReviewInput) string {
 			}
 		}
 		if len(input.AcceptanceCriteria) > 0 {
-			b.WriteString("\n## Acceptance criteria\n")
+			if input.Description != "" {
+				b.WriteString("\n")
+			}
+			b.WriteString("## Acceptance criteria\n")
 			for _, iss := range input.AcceptanceCriteria {
 				fmt.Fprintf(&b, "- #%d %s\n", iss.Number, iss.Title)
 				if iss.Body != "" {
