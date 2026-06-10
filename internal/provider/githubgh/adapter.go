@@ -151,6 +151,10 @@ func (a *Adapter) FetchLinkedIssues(ctx context.Context, target review.ReviewTar
 
 	var issues []review.IssueContext
 	var notes []string
+	if n := len(refs.ClosingIssuesReferences); n > review.MaxLinkedIssues {
+		notes = append(notes, fmt.Sprintf("%d closing issue(s) beyond the first %d not fetched", n-review.MaxLinkedIssues, review.MaxLinkedIssues))
+		refs.ClosingIssuesReferences = refs.ClosingIssuesReferences[:review.MaxLinkedIssues]
+	}
 	for _, r := range refs.ClosingIssuesReferences {
 		owner, name := r.Repository.Owner.Login, r.Repository.Name
 		if owner == "" {
@@ -327,9 +331,9 @@ func (a *Adapter) PreflightList(ctx context.Context) error {
 }
 
 type ghPR struct {
-	Number    int    `json:"number"`
-	Title     string `json:"title"`
-	Author    struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	UpdatedAt time.Time `json:"updatedAt"`

@@ -28,11 +28,11 @@ import (
 // diffsmith-5va). Tests almost universally just want to drive the inner
 // ReviewModel to a particular state — they don't care about the loader's
 // async machinery. So this wrapper:
-//   1. Runs the pipeline synchronously, feeding each tea.Msg straight
-//      into loader.Update. By the end, the loader has transitioned to a
-//      populated ReviewModel (or set an error via LoadErrorMsg).
-//   2. Calls the test's fake against the loader's inner ReviewModel,
-//      preserving the historical callback signature.
+//  1. Runs the pipeline synchronously, feeding each tea.Msg straight
+//     into loader.Update. By the end, the loader has transitioned to a
+//     populated ReviewModel (or set an error via LoadErrorMsg).
+//  2. Calls the test's fake against the loader's inner ReviewModel,
+//     preserving the historical callback signature.
 //
 // A test that wants to inspect the loader's loading-phase behavior can
 // override runTUI directly instead of using this helper.
@@ -561,12 +561,12 @@ func TestWriteFindings_DebugDumpsQuarantinedDetails(t *testing.T) {
 	writeFindings(&buf, nil, quarantined, 2, "", true)
 	out := buf.String()
 	for _, want := range []string{
-		"Outside hunk",                          // first title
-		"Empty comment",                         // second title
-		"internal/store/buffer.go:9999",         // first location
-		"internal/store/buffer.go:12",           // second location
-		"line 9999 is outside any hunk",         // first reason
-		"suggested_comment is empty",            // second reason
+		"Outside hunk",                  // first title
+		"Empty comment",                 // second title
+		"internal/store/buffer.go:9999", // first location
+		"internal/store/buffer.go:12",   // second location
+		"line 9999 is outside any hunk", // first reason
+		"suggested_comment is empty",    // second reason
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("debug dump missing %q; got:\n%s", want, out)
@@ -907,6 +907,42 @@ index 1111111..2222222 100644
 // TestReviewNoModelsAvailableErrors verifies that when all model adapters fail
 // their preflight checks the picker surfaces a clear "no review CLIs available"
 // error rather than a confusing TUI failure.
+// TestReviewPrintPromptIncludesDescriptionByDefault verifies that --print-prompt
+// without --no-context renders the PR description inside the # Intent section,
+// so the model receives the operator's stated intent. (diffsmith-144)
+func TestReviewPrintPromptIncludesDescriptionByDefault(t *testing.T) {
+	in := sampleReviewInput()
+	in.Description = "INTENT-MARKER: implements retry with backoff."
+	stub := &stubProvider{supports: func(string) bool { return true }, fetchInput: in}
+	root, out := newTestRoot(stub)
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--print-prompt"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "# Intent") || !strings.Contains(got, "INTENT-MARKER: implements retry with backoff.") {
+		t.Errorf("default print-prompt must include the description in a # Intent section; got:\n%s", got)
+	}
+}
+
+// TestReviewPrintPromptNoContextOmitsDescription verifies that --no-context
+// strips the PR description from the printed prompt so the model cannot see
+// the stated intent when the operator requests a diff-only review. (diffsmith-144)
+func TestReviewPrintPromptNoContextOmitsDescription(t *testing.T) {
+	in := sampleReviewInput()
+	in.Description = "INTENT-MARKER: implements retry with backoff."
+	stub := &stubProvider{supports: func(string) bool { return true }, fetchInput: in}
+	root, out := newTestRoot(stub)
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--print-prompt", "--no-context"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "INTENT-MARKER") || strings.Contains(got, "# Intent") {
+		t.Errorf("--no-context must strip the description from the printed prompt; got:\n%s", got)
+	}
+}
+
 func TestReviewNoModelsAvailableErrors(t *testing.T) {
 	stub := &stubProvider{
 		supports:   func(string) bool { return true },

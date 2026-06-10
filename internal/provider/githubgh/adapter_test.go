@@ -3,6 +3,7 @@ package githubgh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -184,11 +185,76 @@ func TestFetchLinkedIssues_ResolvesClosingRefs(t *testing.T) {
 		t.Errorf("no notes expected on clean resolution; got %v", notes)
 	}
 	// First call resolves the closing refs; subsequent calls read issues.
-	if !strings.Contains(strings.Join((*calls)[0].args, " "), "closingIssuesReferences") {
-		t.Errorf("first call should query closingIssuesReferences; got %v", (*calls)[0].args)
+	wantRefsCall := []string{"pr", "view", "https://github.com/owner/repo/pull/42", "--json", "closingIssuesReferences"}
+	if (*calls)[0].name != "gh" || !reflect.DeepEqual((*calls)[0].args, wantRefsCall) {
+		t.Errorf("first call (closingIssuesReferences): got %s %v, want gh %v", (*calls)[0].name, (*calls)[0].args, wantRefsCall)
 	}
-	if (*calls)[1].args[0] != "issue" || (*calls)[1].args[1] != "view" {
-		t.Errorf("second call should be `gh issue view`; got %v", (*calls)[1].args)
+	// The issue-view call must request exactly the four JSON fields the adapter decodes.
+	wantIssueView := []string{"issue", "view", "7", "--repo", "owner/repo", "--json", "number,title,body,url"}
+	if (*calls)[1].name != "gh" || !reflect.DeepEqual((*calls)[1].args, wantIssueView) {
+		t.Errorf("second call (issue view): got %s %v, want gh %v", (*calls)[1].name, (*calls)[1].args, wantIssueView)
+	}
+}
+
+// TestFetchLinkedIssues_CapsRefsToMax: when a PR closes more than
+// review.MaxLinkedIssues issues, only the first review.MaxLinkedIssues
+// are fetched (no excess gh issue view calls) and a note is appended
+// describing how many were skipped.
+func TestFetchLinkedIssues_CapsRefsToMax(t *testing.T) {
+	// Build a closingIssuesReferences JSON with MaxLinkedIssues+1 refs.
+	n := review.MaxLinkedIssues + 1
+	refsEntries := make([]string, n)
+	for i := 0; i < n; i++ {
+		num := i + 1
+		refsEntries[i] = fmt.Sprintf(`{"number":%d,"url":"https://github.com/owner/repo/issues/%d","repository":{"name":"repo","owner":{"login":"owner"}}}`, num, num)
+	}
+	refsJSON := []byte(`{"closingIssuesReferences":[` + strings.Join(refsEntries, ",") + `]}`)
+
+	// Provide canned responses for the refs call + exactly MaxLinkedIssues issue-view calls.
+	responses := make([]scriptedResponse, 1+review.MaxLinkedIssues)
+	responses[0] = scriptedResponse{out: refsJSON}
+	for i := 0; i < review.MaxLinkedIssues; i++ {
+		num := i + 1
+		responses[1+i] = scriptedResponse{out: []byte(fmt.Sprintf(
+			`{"number":%d,"title":"Issue %d","body":"body %d","url":"https://github.com/owner/repo/issues/%d"}`,
+			num, num, num, num,
+		))}
+	}
+
+	run, calls := scriptedRunnerSeq(t, responses)
+	a := New(run)
+
+	issues, notes, err := a.FetchLinkedIssues(context.Background(), linkedIssuesTarget())
+	if err != nil {
+		t.Fatalf("FetchLinkedIssues: %v", err)
+	}
+
+	// (i) Exactly MaxLinkedIssues issues returned.
+	if got := len(issues); got != review.MaxLinkedIssues {
+		t.Errorf("want %d issues (cap), got %d", review.MaxLinkedIssues, got)
+	}
+
+	// (ii) A cap note is present.
+	if len(notes) == 0 {
+		t.Fatal("want a cap note; got no notes")
+	}
+	found := false
+	for _, note := range notes {
+		if strings.Contains(note, "not fetched") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("cap note must describe skipped refs; got notes: %v", notes)
+	}
+
+	// (iii) Only 1 + review.MaxLinkedIssues runner calls: the closingIssuesReferences
+	// call plus one issue-view per kept ref (no calls for the excess ref).
+	wantCalls := 1 + review.MaxLinkedIssues
+	if got := len(*calls); got != wantCalls {
+		t.Errorf("want %d runner calls (1 refs + %d issue-views), got %d — excess refs were fetched",
+			wantCalls, review.MaxLinkedIssues, got)
 	}
 }
 

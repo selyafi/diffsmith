@@ -242,6 +242,9 @@ func TestFetchLinkedIssues_ResolvesClosesIssues(t *testing.T) {
 	if issues[0].Number != 7 || issues[0].Title != "Widget" || !strings.Contains(issues[0].Body, "widgets") || issues[0].URL == "" {
 		t.Errorf("issue[0] decoded wrong: %+v", issues[0])
 	}
+	if issues[1].Number != 9 || issues[1].Title != "Gadget" {
+		t.Errorf("issue[1] decoded wrong: got Number=%d Title=%q, want Number=9 Title=%q", issues[1].Number, issues[1].Title, "Gadget")
+	}
 	if len(notes) != 0 {
 		t.Errorf("no notes expected (single call); got %v", notes)
 	}
