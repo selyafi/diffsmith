@@ -2,8 +2,41 @@ package model
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
+
+// TestParseErrorPreservesFullRawOutput is diffsmith-2xy: when a model
+// emits unparseable output, the FULL raw payload must be retained (not
+// truncated) so it can be surfaced for diagnosis. Previously Raw was
+// clipped to 200 chars, discarding the rest of the evidence.
+func TestParseErrorPreservesFullRawOutput(t *testing.T) {
+	raw := []byte(`{"findings":[` + strings.Repeat("x", 400) + `TAIL_MARKER`)
+	_, err := ParseFindings(raw)
+	var pe *ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *ParseError, got %T: %v", err, err)
+	}
+	if !strings.Contains(pe.Raw, "TAIL_MARKER") {
+		t.Errorf("Raw must preserve the full output (len %d); the tail past 200 chars was dropped", len(pe.Raw))
+	}
+}
+
+// TestParseErrorMessageIncludesRawSnippet ensures the error STRING carries
+// a snippet of the offending output. Adapters wrap this error with %w and
+// the dropped-model run summary prints it with %v, so without a snippet a
+// user whose model returned garbage sees no bytes of that garbage.
+func TestParseErrorMessageIncludesRawSnippet(t *testing.T) {
+	raw := []byte(`{"oops": SNIPPET_MARKER not valid json`)
+	_, err := ParseFindings(raw)
+	var pe *ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("want *ParseError, got %T: %v", err, err)
+	}
+	if !strings.Contains(pe.Error(), "SNIPPET_MARKER") {
+		t.Errorf("Error() should include a raw snippet for diagnosis; got %q", pe.Error())
+	}
+}
 
 func TestParseFindingsHappy(t *testing.T) {
 	raw := []byte(`{
