@@ -4,6 +4,23 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.2.1 — 2026-06-11
+
+### Fixed
+
+- Codex reviews work again: `codex exec` now receives
+  `--skip-git-repo-check`, without which codex refuses to start in the
+  isolated temp working directory introduced in v0.2.0
+  (`diffsmith-4tz`) and every codex review — and any codex-led
+  synthesis — failed with "Not inside a trusted directory". The gemini
+  adapter received its equivalent `--skip-trust` in that release; the
+  codex flag was missed. (`diffsmith-ce8`)
+- When every reviewer fails, context-fetch notes (e.g. "acceptance
+  criteria unavailable: …") are now folded into the error itself
+  instead of a status line the error screen never renders, so the
+  failure output explains both what failed and what review context was
+  missing. (`diffsmith-h7a`)
+
 ## v0.2.0 — 2026-06-11
 
 ### Added
