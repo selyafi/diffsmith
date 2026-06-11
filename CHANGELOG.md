@@ -4,6 +4,44 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.2.0 — 2026-06-11
+
+### Added
+
+- Reviewer context: diffsmith sends the PR/MR description and the
+  acceptance criteria from issues the PR/MR formally closes (resolved
+  via `gh`/`glab`), rendered in a `# Intent` section before the diff so
+  reviewers can flag scope drift and unmet acceptance criteria. The
+  description is captured for free during fetch; linked-issue resolution
+  is an optional provider capability (GitHub `closingIssuesReferences` →
+  `gh issue view`; GitLab `glab api .../closes_issues`). Context is
+  budget-capped (8 KiB description, 8 KiB per issue body, first 10
+  issues) and any truncation or fetch failure is surfaced in the run
+  summary — never silent. `--no-context` opts out, withholding the
+  description and skipping the linked-issue fetch entirely.
+  (`diffsmith-144`)
+- `--model-timeout <dur>` flag: a per-model wall-clock cap (default
+  10m) on every entry point. A model exceeding it is cancelled and
+  dropped from the review, so one hung reviewer CLI can no longer block
+  the parallel fan-out. (`diffsmith-ptr`)
+
+### Changed
+
+- Reviewer model CLIs (`codex`, `claude`, `gemini`) now run in an
+  isolated temporary working directory instead of the caller's cwd, so
+  they no longer autoload the project's `.agents/skills`, `AGENTS.md`,
+  or `CLAUDE.md` — protecting the no-auto-post guarantee against a
+  reviewer CLI picking up project-level instructions. `$HOME`-based
+  auth is untouched. (`diffsmith-4tz`)
+
+### Fixed
+
+- Parse failures now preserve the full model output: `ParseError.Raw`
+  retains the complete payload (previously truncated to 200 chars), and
+  the dropped-model run summary surfaces a bounded snippet so a model
+  returning malformed JSON leaves a diagnosable trace instead of
+  vanishing. (`diffsmith-2xy`)
+
 ## v0.1.7 — 2026-05-27
 
 ### Added
