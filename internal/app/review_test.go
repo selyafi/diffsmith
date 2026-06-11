@@ -986,3 +986,53 @@ func TestReviewUnsupportedURL(t *testing.T) {
 		t.Errorf("unsupported URL should error; got: %v", err)
 	}
 }
+
+// fetcherStubProvider is a stubProvider that also implements
+// review.LinkedIssueFetcher, so command-level tests can drive the
+// context-enrichment paths through the real pipeline.
+type fetcherStubProvider struct {
+	*stubProvider
+	*fakeFetcher
+}
+
+// TestReviewAllModelsFailedFoldsContextNotesIntoError is the
+// diffsmith-h7a regression: on the surviving==0 path the context notes
+// were sent as a PhaseStatusMsg one message before LoadErrorMsg, but
+// the loader's error view renders only the error — so the notes
+// vanished exactly when they help explain the failure. They must
+// travel inside the error itself.
+func TestReviewAllModelsFailedFoldsContextNotesIntoError(t *testing.T) {
+	stubProv := &fetcherStubProvider{
+		stubProvider: &stubProvider{
+			supports:   func(string) bool { return true },
+			fetchInput: reviewInputWithSessionDiff(t),
+		},
+		fakeFetcher: &fakeFetcher{err: errors.New("gh rate limited")},
+	}
+	failing := &stubModel{name: "codex", reviewErr: errors.New("codex CLI crashed")}
+
+	withFakePicker(t, map[string]model.Model{"codex": failing})
+	withFakeTUI(t, func(*tui.Model) error { return nil })
+
+	registry := provider.NewRegistry(stubProv)
+	root := &cobra.Command{Use: "diffsmith", SilenceUsage: true}
+	root.AddCommand(newReviewCmd(registry, map[string]model.Model{"codex": failing}))
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when all models fail")
+	}
+	for _, want := range []string{
+		"codex CLI crashed",
+		"acceptance criteria unavailable",
+		"gh rate limited",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("all-models-failed error missing %q; got:\n%v", want, err)
+		}
+	}
+}

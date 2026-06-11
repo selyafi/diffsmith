@@ -285,10 +285,16 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		surviving, dropped := splitOutcomes(outcomes)
 
 		if len(surviving) == 0 {
+			// Fold context notes into the error itself: the loader's
+			// error view renders only the error (and loader.Err() is
+			// what cobra prints on exit), so a PhaseStatusMsg sent here
+			// would be clobbered before it could ever render.
+			// diffsmith-h7a.
+			err := aggregateErrors(dropped)
 			if len(contextNotes) > 0 {
-				send(tui.PhaseStatusMsg("context: " + strings.Join(contextNotes, "; ")))
+				err = fmt.Errorf("%w\n  context: %s", err, strings.Join(contextNotes, "; "))
 			}
-			send(tui.LoadErrorMsg{Err: aggregateErrors(dropped)})
+			send(tui.LoadErrorMsg{Err: err})
 			return
 		}
 
