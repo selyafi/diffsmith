@@ -110,7 +110,12 @@ func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review
 	}
 	defer cleanup()
 
-	out, err := a.run(ctx, strings.NewReader(prompt), "codex", "exec", "--output-schema", schemaPath)
+	// --skip-git-repo-check: IsolatedRunner executes codex in an empty
+	// temp dir (diffsmith-4tz), which codex refuses as untrusted without
+	// the flag — the gemini adapter's --skip-trust equivalent. The dir
+	// holds nothing codex could act on; the prompt arrives via stdin.
+	// diffsmith-ce8.
+	out, err := a.run(ctx, strings.NewReader(prompt), "codex", "exec", "--skip-git-repo-check", "--output-schema", schemaPath)
 	if err != nil {
 		return nil, fmt.Errorf("codex exec: %w", err)
 	}

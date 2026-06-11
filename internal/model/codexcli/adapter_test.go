@@ -99,6 +99,36 @@ func TestReviewExecutesCodexWithSchemaPath(t *testing.T) {
 	}
 }
 
+// TestCodexArgvIncludesSkipGitRepoCheck is the diffsmith-ce8 regression:
+// IsolatedRunner (diffsmith-4tz) executes codex in an empty temp dir,
+// and `codex exec` refuses to run outside a git repo / trusted dir
+// unless --skip-git-repo-check is passed — so without the flag every
+// review dies with "Not inside a trusted directory". Both entry points
+// that invoke codex must carry it.
+func TestCodexArgvIncludesSkipGitRepoCheck(t *testing.T) {
+	t.Run("review", func(t *testing.T) {
+		run, calls := scriptedRunner(t, [][]byte{[]byte(`{"findings":[]}`)})
+		a := New(run)
+		if _, err := a.Review(context.Background(), sampleInput()); err != nil {
+			t.Fatalf("Review: %v", err)
+		}
+		if indexOf((*calls)[0].args, "--skip-git-repo-check") < 0 {
+			t.Errorf("argv missing --skip-git-repo-check: got %v", (*calls)[0].args)
+		}
+	})
+	t.Run("synthesize", func(t *testing.T) {
+		run, calls := scriptedRunner(t, [][]byte{[]byte(`{"findings":[]}`)})
+		a := New(run)
+		others := []*review.ModelReviewResult{{Model: "claude", RawOutput: `{"findings":[]}`}}
+		if _, err := a.Synthesize(context.Background(), sampleInput(), others); err != nil {
+			t.Fatalf("Synthesize: %v", err)
+		}
+		if indexOf((*calls)[0].args, "--skip-git-repo-check") < 0 {
+			t.Errorf("argv missing --skip-git-repo-check: got %v", (*calls)[0].args)
+		}
+	})
+}
+
 func indexOf(haystack []string, needle string) int {
 	for i, s := range haystack {
 		if s == needle {
