@@ -90,8 +90,8 @@ func renameMapFromFiles(files []*diff.DiffFile) map[string]string {
 }
 
 type reviewFlags struct {
-	dryRun       bool
-	printPrompt  bool
+	dryRun      bool
+	printPrompt bool
 	// printSynthesisPrompt prints the multi-model synthesis prompt
 	// (BuildSynthesisPrompt) using stub reviewer outputs, so operators
 	// can inspect the lead model's input — rules, ordering, sentinels,
@@ -285,6 +285,9 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		surviving, dropped := splitOutcomes(outcomes)
 
 		if len(surviving) == 0 {
+			if len(contextNotes) > 0 {
+				send(tui.PhaseStatusMsg("context: " + strings.Join(contextNotes, "; ")))
+			}
 			send(tui.LoadErrorMsg{Err: aggregateErrors(dropped)})
 			return
 		}
