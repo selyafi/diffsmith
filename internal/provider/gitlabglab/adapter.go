@@ -168,7 +168,7 @@ func (a *Adapter) FetchLinkedIssues(ctx context.Context, target review.ReviewTar
 	projectPath := url.PathEscape(target.Owner + "/" + target.Repo)
 	apiPath := fmt.Sprintf("projects/%s/merge_requests/%d/closes_issues", projectPath, target.Number)
 	args := []string{"api", apiPath}
-	if host := hostnameFromURL(target.URL); host != "" {
+	if host := target.Hostname(); host != "" {
 		args = append(args, "--hostname", host)
 	}
 
@@ -199,18 +199,6 @@ func (a *Adapter) FetchLinkedIssues(ctx context.Context, target review.ReviewTar
 		})
 	}
 	return issues, nil, nil
-}
-
-// hostnameFromURL extracts the host from an MR URL so `glab api` targets
-// the right GitLab instance (self-hosted as well as gitlab.com). Returns
-// "" if the URL can't be parsed, in which case glab falls back to its
-// default host resolution.
-func hostnameFromURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	return u.Host
 }
 
 // splitProjectPath splits "group/project" or "group/sub/project" into

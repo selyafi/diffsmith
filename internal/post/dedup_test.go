@@ -400,3 +400,65 @@ func TestPoster_Submit_GitLabDedupSkipsExistingThreads(t *testing.T) {
 		t.Errorf("expected truthful posted-count line; got: %s", out)
 	}
 }
+
+// TestFetchExistingGitHubKeys_MultiPagePaginateOutput is the
+// diffsmith-kjk regression: gh --paginate emits one JSON array PER
+// PAGE, back to back. Unmarshalling that as a single array fails on
+// >100-comment PRs, which silently disabled dedup exactly where it
+// matters. Keys from every page must land.
+func TestFetchExistingGitHubKeys_MultiPagePaginateOutput(t *testing.T) {
+	raw := []byte(`[{"body":"<!-- diffsmith --> one","path":"a.go","line":11}]` + "\n" +
+		`[{"body":"<!-- diffsmith --> two","path":"b.go","line":22}]`)
+	run := func(_ context.Context, _ io.Reader, _ string, _ ...string) ([]byte, error) {
+		return raw, nil
+	}
+	target := review.ReviewTarget{Host: review.HostGitHub, Owner: "o", Repo: "r", Number: 7}
+	got, err := fetchExistingGitHubKeys(context.Background(), run, target)
+	if err != nil {
+		t.Fatalf("multi-page paginate output must parse: %v", err)
+	}
+	if !got[dedupKey("a.go", 11)] || !got[dedupKey("b.go", 22)] {
+		t.Errorf("keys from both pages must land; got %v", got)
+	}
+}
+
+// TestFetchExistingGitLabKeys_MultiPagePaginateOutput: same
+// diffsmith-kjk regression for the glab fetcher.
+func TestFetchExistingGitLabKeys_MultiPagePaginateOutput(t *testing.T) {
+	raw := []byte(`[{"notes":[{"body":"<!-- diffsmith --> one","position":{"new_path":"a.go","new_line":11}}]}]` + "\n" +
+		`[{"notes":[{"body":"<!-- diffsmith --> two","position":{"new_path":"b.go","new_line":22}}]}]`)
+	run := func(_ context.Context, _ io.Reader, _ string, _ ...string) ([]byte, error) {
+		return raw, nil
+	}
+	target := review.ReviewTarget{Host: review.HostGitLab, Owner: "o", Repo: "r", Number: 7}
+	got, err := fetchExistingGitLabKeys(context.Background(), run, target)
+	if err != nil {
+		t.Fatalf("multi-page paginate output must parse: %v", err)
+	}
+	if !got[dedupKey("a.go", 11)] || !got[dedupKey("b.go", 22)] {
+		t.Errorf("keys from both pages must land; got %v", got)
+	}
+}
+
+// TestFetchExistingGitLabKeys_PinsHostnameFromTargetURL is
+// diffsmith-1bk: glab resolves bare api calls against its configured
+// default host, which can be a different instance than the MR's. The
+// dedup fetch must pin --hostname from the target URL.
+func TestFetchExistingGitLabKeys_PinsHostnameFromTargetURL(t *testing.T) {
+	var gotArgs []string
+	run := func(_ context.Context, _ io.Reader, _ string, args ...string) ([]byte, error) {
+		gotArgs = append([]string(nil), args...)
+		return []byte(`[]`), nil
+	}
+	target := review.ReviewTarget{
+		Host: review.HostGitLab, Owner: "o", Repo: "r", Number: 7,
+		URL: "https://gitlab.example.com/o/r/-/merge_requests/7",
+	}
+	if _, err := fetchExistingGitLabKeys(context.Background(), run, target); err != nil {
+		t.Fatalf("fetchExistingGitLabKeys: %v", err)
+	}
+	joined := strings.Join(gotArgs, " ")
+	if !strings.Contains(joined, "--hostname gitlab.example.com") {
+		t.Errorf("glab dedup fetch must pin --hostname from target URL; got args %v", gotArgs)
+	}
+}

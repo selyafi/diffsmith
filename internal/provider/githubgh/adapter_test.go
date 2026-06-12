@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/selyafi/diffsmith/internal/diff"
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/review"
 )
@@ -78,7 +79,11 @@ func TestAdapterFetchHappyPath(t *testing.T) {
 	if (*calls)[0].name != "gh" || !reflect.DeepEqual((*calls)[0].args, wantView) {
 		t.Errorf("view call: got %s %v, want gh %v", (*calls)[0].name, (*calls)[0].args, wantView)
 	}
-	wantDiff := []string{"pr", "diff", "https://github.com/owner/repo/pull/42", "--patch", "--color", "never"}
+	// No --patch: that flag returns a per-commit format-patch mailbox
+	// series (duplicate file sections, per-commit-tree line numbers
+	// that misanchor the line oracle on multi-commit PRs). The default
+	// response is the consolidated PR diff. diffsmith-a4o.
+	wantDiff := []string{"pr", "diff", "https://github.com/owner/repo/pull/42", "--color", "never"}
 	if (*calls)[1].name != "gh" || !reflect.DeepEqual((*calls)[1].args, wantDiff) {
 		t.Errorf("diff call: got %s %v, want gh %v", (*calls)[1].name, (*calls)[1].args, wantDiff)
 	}
@@ -634,10 +639,13 @@ func TestAdapterFetch_FallbackReassemblesRenamesAndDeletes(t *testing.T) {
 func TestAdapterFetch_FallbackSkipsNullPatchFiles(t *testing.T) {
 	metaJSON := []byte(`{"title":"X","author":{"login":"a"},"headRefName":"h","headRefOid":"deadbeef","baseRefName":"main","url":"u"}`)
 	diffErr := errors.New("gh: exit 1: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)")
-	// One reviewable file, one too-large file (patch:null).
+	// One reviewable file, one too-large file. A genuinely size-capped
+	// entry has a null patch WITH a non-zero change count — null patch
+	// with changes:0 means binary/rename/mode-only and is synthesized
+	// as metadata instead (diffsmith-oks).
 	filesJSON := []byte(`[
-		{"filename":"small.go","status":"modified","patch":"@@ -1,1 +1,1 @@\n-old\n+new"},
-		{"filename":"huge.go","status":"modified","patch":null}
+		{"filename":"small.go","status":"modified","changes":2,"patch":"@@ -1,1 +1,1 @@\n-old\n+new"},
+		{"filename":"huge.go","status":"modified","changes":80000,"patch":null}
 	]`)
 	run, _ := scriptedRunnerSeq(t, []scriptedResponse{
 		{out: metaJSON},
@@ -655,5 +663,105 @@ func TestAdapterFetch_FallbackSkipsNullPatchFiles(t *testing.T) {
 	}
 	if input.Files[0].Path != "small.go" {
 		t.Errorf("kept file path: got %q, want small.go", input.Files[0].Path)
+	}
+}
+
+// TestAdapterFetch_FilesAPIFallbackMultiPage is the diffsmith-kjk
+// regression on the diffsmith-5n4 fallback: gh --paginate emits one
+// JSON array PER PAGE, so PRs with >100 changed files (the norm for
+// over-20K-line PRs) produced concatenated arrays the old single
+// json.Unmarshal could not parse — the fallback failed on exactly the
+// PRs it exists for. Files from every page must reach the diff.
+func TestAdapterFetch_FilesAPIFallbackMultiPage(t *testing.T) {
+	metaJSON := []byte(`{
+		"title": "Big PR", "author": {"login": "alice"},
+		"headRefName": "feat/big",
+		"headRefOid": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"baseRefName": "main", "url": "https://github.com/owner/repo/pull/42"
+	}`)
+	diffErr := errors.New("gh: exit 1: could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)")
+	pagedFiles := []byte(`[{"filename":"a/first.go","status":"modified","patch":"@@ -1,1 +1,1 @@\n-var X = 1\n+var X = 2"}]` + "\n" +
+		`[{"filename":"b/second.go","status":"added","patch":"@@ -0,0 +1,1 @@\n+const Y = 1"}]`)
+
+	run, _ := scriptedRunnerSeq(t, []scriptedResponse{
+		{out: metaJSON},
+		{err: diffErr},
+		{out: pagedFiles},
+	})
+	a := New(run)
+
+	input, err := a.Fetch(context.Background(), "https://github.com/owner/repo/pull/42")
+	if err != nil {
+		t.Fatalf("multi-page files fallback must succeed; got: %v", err)
+	}
+	var paths []string
+	for _, f := range input.Files {
+		paths = append(paths, f.Path)
+	}
+	for _, want := range []string{"a/first.go", "b/second.go"} {
+		found := false
+		for _, p := range paths {
+			if p == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("file %s from paginated response missing; got %v", want, paths)
+		}
+	}
+}
+
+// TestAdapterFetch_FilesAPINilPatchKinds is the diffsmith-oks
+// regression: GitHub returns no `patch` for binary files, pure renames,
+// and mode-only changes — not just for size-capped text. The fallback
+// dropped all of them with a misleading "exceeds per-file size cap"
+// warning, so unlike the normal `gh pr diff` path they vanished from
+// the prompt's metadata section. Zero-change nil-patch entries must be
+// synthesized as metadata-only diff segments; only changes>0 entries
+// are genuinely capped and skipped.
+func TestAdapterFetch_FilesAPINilPatchKinds(t *testing.T) {
+	metaJSON := []byte(`{
+		"title": "Big PR", "author": {"login": "alice"},
+		"headRefName": "feat/big",
+		"headRefOid": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"baseRefName": "main", "url": "https://github.com/owner/repo/pull/42"
+	}`)
+	diffErr := errors.New("gh: exit 1: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000)")
+	filesJSON := []byte(`[
+		{"filename":"normal.go","status":"modified","changes":2,"patch":"@@ -1,1 +1,1 @@\n-a\n+b"},
+		{"filename":"logo.png","status":"modified","changes":0},
+		{"filename":"renamed.go","previous_filename":"orig.go","status":"renamed","changes":0},
+		{"filename":"huge.gen.go","status":"modified","changes":50000}
+	]`)
+	var warnBuf strings.Builder
+	run, _ := scriptedRunnerSeq(t, []scriptedResponse{
+		{out: metaJSON}, {err: diffErr}, {out: filesJSON},
+	})
+	a := New(run)
+	a.warn = &warnBuf
+
+	input, err := a.Fetch(context.Background(), "https://github.com/owner/repo/pull/42")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	kinds := map[string]diff.FileKind{}
+	for _, f := range input.Files {
+		kinds[f.Path] = f.Kind
+	}
+	if kinds["logo.png"] != diff.FileBinary {
+		t.Errorf("binary nil-patch entry must surface as FileBinary metadata; got %v (files: %v)", kinds["logo.png"], kinds)
+	}
+	if kinds["renamed.go"] != diff.FilePureRename {
+		t.Errorf("pure-rename nil-patch entry must surface as FilePureRename; got %v", kinds["renamed.go"])
+	}
+	if _, present := kinds["huge.gen.go"]; present {
+		t.Error("size-capped entry must still be skipped, not synthesized")
+	}
+	warn := warnBuf.String()
+	if !strings.Contains(warn, "huge.gen.go") || !strings.Contains(warn, "size cap") {
+		t.Errorf("size-cap warning must name the capped file; got %q", warn)
+	}
+	if strings.Contains(warn, "logo.png") || strings.Contains(warn, "renamed.go") {
+		t.Errorf("metadata-only files must not be warned about as size-capped; got %q", warn)
 	}
 }

@@ -66,7 +66,13 @@ func (a *Adapter) Fetch(ctx context.Context, rawURL string) (*review.ReviewInput
 		return nil, err
 	}
 
-	rawDiff, err := a.run(ctx, nil, "gh", "pr", "diff", ref.URL, "--patch", "--color", "never")
+	// No --patch: that returns the per-commit format-patch mailbox
+	// series, where a file edited in two commits appears twice with
+	// line numbers relative to each intermediate tree — diff.NewIndex
+	// keeps only the last section, so findings can validate against
+	// (and post to) the wrong lines. The default response is the
+	// consolidated PR diff. diffsmith-a4o.
+	rawDiff, err := a.run(ctx, nil, "gh", "pr", "diff", ref.URL, "--color", "never")
 	if err != nil {
 		if !isDiffTooLargeErr(err) {
 			return nil, fmt.Errorf("gh pr diff: %w", err)
@@ -239,9 +245,16 @@ type ghPullFile struct {
 	Filename         string `json:"filename"`
 	PreviousFilename string `json:"previous_filename"`
 	Status           string `json:"status"`
+	// Changes (additions+deletions) disambiguates WHY Patch is null:
+	// zero means there is no text diff to show (binary file, pure
+	// rename, mode-only change) and the file should surface as a
+	// metadata-only segment; non-zero means the patch exists but
+	// exceeds GitHub's per-file cap. diffsmith-oks.
+	Changes int `json:"changes"`
 	// Patch is the file's unified-diff body (hunks only — no
 	// `--- a/...` / `+++ b/...` headers). Null when the file's patch
-	// exceeds the per-file ~3MB cap; we surface and skip those.
+	// exceeds the per-file ~3MB cap, or when there is no text diff at
+	// all (see Changes).
 	Patch *string `json:"patch"`
 }
 
@@ -255,8 +268,11 @@ func (a *Adapter) fetchDiffViaFilesAPI(ctx context.Context, ref *PullRequestRef)
 	if err != nil {
 		return "", fmt.Errorf("gh api %s: %w", apiPath, err)
 	}
-	var files []ghPullFile
-	if err := json.Unmarshal(out, &files); err != nil {
+	// --paginate emits one JSON array per page (and >20K-line PRs
+	// usually have >100 files, i.e. multiple pages); DecodePages
+	// handles single- and multi-page output alike. diffsmith-kjk.
+	files, err := provider.DecodePages[ghPullFile](out)
+	if err != nil {
 		preview := string(out)
 		if len(preview) > 200 {
 			preview = preview[:200] + "…"
@@ -267,6 +283,16 @@ func (a *Adapter) fetchDiffViaFilesAPI(ctx context.Context, ref *PullRequestRef)
 	skipped := 0
 	for _, f := range files {
 		if f.Patch == nil {
+			// No patch + no changes = nothing to diff (binary, pure
+			// rename, mode-only): synthesize a metadata-only segment so
+			// the file reaches the prompt's # Files section like it does
+			// on the normal `gh pr diff` path. Only a non-zero change
+			// count means a genuinely size-capped text patch.
+			// diffsmith-oks.
+			if f.Changes == 0 {
+				writeMetadataOnlyFile(&b, f)
+				continue
+			}
 			skipped++
 			fmt.Fprintf(a.warn, "diffsmith: skipping %s (patch exceeds GitHub per-file size cap; not reviewable via files API)\n", f.Filename)
 			continue
@@ -277,6 +303,31 @@ func (a *Adapter) fetchDiffViaFilesAPI(ctx context.Context, ref *PullRequestRef)
 		fmt.Fprintf(a.warn, "diffsmith: %d file(s) skipped during files-API fallback\n", skipped)
 	}
 	return b.String(), nil
+}
+
+// writeMetadataOnlyFile emits a hunk-less diff segment for a file with
+// no text diff (binary, pure rename, mode-only), mirroring git's own
+// headers so diff.Parse classifies it FilePureRename / FileBinary and
+// the prompt lists it as metadata-only. Mode-only changes are not
+// distinguishable from binary in the files-API response (both have
+// changes==0, no patch); they land under the binary header, which still
+// renders as metadata-only. diffsmith-oks.
+func writeMetadataOnlyFile(b *strings.Builder, f ghPullFile) {
+	oldPath := f.Filename
+	if f.PreviousFilename != "" {
+		oldPath = f.PreviousFilename
+	}
+	fmt.Fprintf(b, "diff --git a/%s b/%s\n", oldPath, f.Filename)
+	switch f.Status {
+	case "renamed", "copied":
+		b.WriteString("similarity index 100%\n")
+		fmt.Fprintf(b, "rename from %s\nrename to %s\n", oldPath, f.Filename)
+	default:
+		// The placeholder index line is required for go-diff to resolve
+		// the file names of a binary segment; its SHAs are never read.
+		b.WriteString("index 0000000..0000000 100644\n")
+		fmt.Fprintf(b, "Binary files a/%s and b/%s differ\n", oldPath, f.Filename)
+	}
 }
 
 // writeReassembledFile emits one file's section of a unified diff:

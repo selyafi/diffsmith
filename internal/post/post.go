@@ -48,7 +48,7 @@ type Poster struct {
 }
 
 const queryResolvePRID = `query($owner:String!,$repo:String!,$number:Int!){
-  repository(owner:$owner,name:$repo){pullRequest(number:$number){id}}
+  repository(owner:$owner,name:$repo){pullRequest(number:$number){id headRefOid}}
 }`
 
 const mutationBeginReview = `mutation($input:AddPullRequestReviewInput!){
@@ -78,9 +78,13 @@ type threadFailure struct {
 // Submit runs the four-phase GraphQL flow that turns approved findings
 // into a single grouped GitHub Review:
 //
-//  1. Resolve the PR's GraphQL node ID from (owner, repo, number).
+//  1. Resolve the PR's GraphQL node ID and current headRefOid; refuse
+//     when the head moved since the diff was fetched (threads anchor
+//     to the current head — there is no commitOID field — so posting
+//     after a push would mis-anchor every comment; diffsmith-cgq).
 //  2. Begin a pending pull request review.
-//  3. Add one inline thread per finding, anchored to (path, line, HeadSHA).
+//  3. Add one inline thread per finding, anchored to (path, line) on
+//     the PR's current head (== capture-time head, per the guard).
 //  4. Finalize: submit if ≥1 thread succeeded; otherwise delete the
 //     pending review so it doesn't strand on GitHub.
 //
@@ -106,9 +110,19 @@ func (p *Poster) Submit(ctx context.Context, target review.ReviewTarget, finding
 	// transient GitHub API hiccup). Bypassed entirely when Repost=true.
 	findings = p.applyDedup(ctx, target, findings, fetchExistingGitHubKeys, runGH)
 
-	prID, err := resolvePRID(ctx, target)
+	prID, headRefOid, err := resolvePRID(ctx, target)
 	if err != nil {
 		return fmt.Errorf("resolve PR ID: %w", err)
+	}
+	// Refuse to post when the PR head moved since the diff was fetched:
+	// AddPullRequestReviewThreadInput has no commitOID field, so threads
+	// anchor to the CURRENT head — posting now would silently re-anchor
+	// every comment to lines the findings never reviewed. Re-running the
+	// review against the new head is the only sound remediation. Empty
+	// SHAs (older scripted callers, unexpected API shapes) skip the
+	// check rather than block posting. diffsmith-cgq.
+	if headRefOid != "" && target.HeadSHA != "" && headRefOid != target.HeadSHA {
+		return fmt.Errorf("PR head moved since the review was fetched (reviewed %s, head is now %s): inline comments would anchor to lines the review never saw; re-run the review against the current head", target.HeadSHA, headRefOid)
 	}
 	if len(findings) == 0 {
 		// Every finding was a duplicate. applyDedup already printed the
@@ -222,31 +236,32 @@ func detectGraphQLErrors(body []byte) error {
 	return fmt.Errorf("graphql: %s", strings.Join(msgs, "; "))
 }
 
-func resolvePRID(ctx context.Context, target review.ReviewTarget) (string, error) {
+func resolvePRID(ctx context.Context, target review.ReviewTarget) (id, headRefOid string, err error) {
 	out, err := graphqlCall(ctx, queryResolvePRID, map[string]any{
 		"owner":  target.Owner,
 		"repo":   target.Repo,
 		"number": target.Number,
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var resp struct {
 		Data struct {
 			Repository struct {
 				PullRequest struct {
-					ID string `json:"id"`
+					ID         string `json:"id"`
+					HeadRefOid string `json:"headRefOid"`
 				} `json:"pullRequest"`
 			} `json:"repository"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(out, &resp); err != nil {
-		return "", fmt.Errorf("decode resolve PR ID response: %w", err)
+		return "", "", fmt.Errorf("decode resolve PR ID response: %w", err)
 	}
 	if resp.Data.Repository.PullRequest.ID == "" {
-		return "", fmt.Errorf("empty PR ID in response: %s", string(out))
+		return "", "", fmt.Errorf("empty PR ID in response: %s", string(out))
 	}
-	return resp.Data.Repository.PullRequest.ID, nil
+	return resp.Data.Repository.PullRequest.ID, resp.Data.Repository.PullRequest.HeadRefOid, nil
 }
 
 func beginReview(ctx context.Context, prID string) (string, error) {
@@ -369,6 +384,14 @@ func (p *Poster) submitGitLab(ctx context.Context, target review.ReviewTarget, f
 	projectID := url.PathEscape(repo)
 	endpoint := fmt.Sprintf("projects/%s/merge_requests/%d/discussions", projectID, target.Number)
 
+	// Pin the MR's instance: bare glab api resolves against the
+	// configured default host, which can be a different GitLab than
+	// the one the MR lives on. diffsmith-1bk.
+	postArgs := []string{"api", endpoint, "--method", "POST", "--input", "-", "-H", "Content-Type: application/json"}
+	if h := target.Hostname(); h != "" {
+		postArgs = append(postArgs, "--hostname", h)
+	}
+
 	var failures []threadFailure
 	for _, f := range findings {
 		// Same-path files: old_path = new_path. Renamed-with-hunks
@@ -397,10 +420,7 @@ func (p *Poster) submitGitLab(ctx context.Context, target review.ReviewTarget, f
 			failures = append(failures, threadFailure{finding: f, err: fmt.Errorf("marshal discussion body: %w", err)})
 			continue
 		}
-		if _, err := runGlab(ctx, bytes.NewReader(reqBody), "glab", "api", endpoint,
-			"--method", "POST",
-			"--input", "-",
-			"-H", "Content-Type: application/json"); err != nil {
+		if _, err := runGlab(ctx, bytes.NewReader(reqBody), "glab", postArgs...); err != nil {
 			failures = append(failures, threadFailure{finding: f, err: err})
 		}
 	}

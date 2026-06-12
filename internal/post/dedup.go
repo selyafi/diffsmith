@@ -2,7 +2,6 @@ package post
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -59,12 +58,20 @@ func fetchExistingGitLabKeys(ctx context.Context, run provider.Runner, target re
 	projectID := url.PathEscape(repo)
 	endpoint := fmt.Sprintf("projects/%s/merge_requests/%d/discussions", projectID, target.Number)
 
-	out, err := run(ctx, nil, "glab", "api", endpoint, "--paginate")
+	args := []string{"api", endpoint, "--paginate"}
+	// Pin the MR's instance: bare glab api resolves against the
+	// configured default host, which can differ. diffsmith-1bk.
+	if h := target.Hostname(); h != "" {
+		args = append(args, "--hostname", h)
+	}
+	out, err := run(ctx, nil, "glab", args...)
 	if err != nil {
 		return nil, fmt.Errorf("fetch existing gitlab discussions: %w", err)
 	}
-	var discussions []glabDiscussion
-	if err := json.Unmarshal(out, &discussions); err != nil {
+	// --paginate emits one JSON array per page; DecodePages handles
+	// single- and multi-page output alike. diffsmith-kjk.
+	discussions, err := provider.DecodePages[glabDiscussion](out)
+	if err != nil {
 		return nil, fmt.Errorf("parse gitlab discussions JSON: %w", err)
 	}
 	keys := make(map[string]bool)
@@ -99,8 +106,10 @@ func fetchExistingGitHubKeys(ctx context.Context, run provider.Runner, target re
 	if err != nil {
 		return nil, fmt.Errorf("fetch existing github review comments: %w", err)
 	}
-	var comments []ghReviewComment
-	if err := json.Unmarshal(out, &comments); err != nil {
+	// --paginate emits one JSON array per page; DecodePages handles
+	// single- and multi-page output alike. diffsmith-kjk.
+	comments, err := provider.DecodePages[ghReviewComment](out)
+	if err != nil {
 		return nil, fmt.Errorf("parse github comments JSON: %w", err)
 	}
 	keys := make(map[string]bool)

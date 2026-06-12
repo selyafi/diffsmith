@@ -863,3 +863,62 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// TestPoster_Submit_GitLabPinsHostnameFromTargetURL is diffsmith-1bk:
+// posting discussions must pin --hostname to the MR's instance, not
+// glab's configured default host — the codebase already learned this
+// for FetchLinkedIssues (gitlabglab adapter).
+func TestPoster_Submit_GitLabPinsHostnameFromTargetURL(t *testing.T) {
+	calls := scriptedGlab(t, []ghResult{
+		{out: []byte(`{"id":"abc","notes":[{"id":1}]}`)},
+	})
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf, Repost: true}
+	target := review.ReviewTarget{
+		Host: review.HostGitLab, Owner: "g", Repo: "p", Number: 3650,
+		URL:      "https://gitlab.example.com/g/p/-/merge_requests/3650",
+		HeadSHA:  "head123", BaseSHA: "base456", StartSHA: "start789",
+	}
+	findings := []review.Finding{
+		{File: "a.go", Line: 11, Severity: review.SeverityHigh, Model: "codex", Confidence: 0.9, SuggestedComment: "first"},
+	}
+	if err := p.Submit(context.Background(), target, findings); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	joined := strings.Join((*calls)[0].args, " ")
+	if !strings.Contains(joined, "--hostname gitlab.example.com") {
+		t.Errorf("glab post must pin --hostname from target URL; got args %v", (*calls)[0].args)
+	}
+}
+
+// TestPoster_Submit_GitHubRefusesOnHeadDrift is diffsmith-cgq: GitHub's
+// addPullRequestReviewThread input has no commitOID field, so threads
+// anchor to the PR's CURRENT head. If the head moved since the diff was
+// fetched (force-push, new commits), posting would silently re-anchor
+// every comment to lines the findings never reviewed — the exact thing
+// ReviewTarget.HeadSHA's contract says must not happen. Submit must
+// refuse, naming both SHAs, before any pending review is created.
+func TestPoster_Submit_GitHubRefusesOnHeadDrift(t *testing.T) {
+	results := []ghResult{
+		{out: []byte(`[]`)}, // dedup fetch: no existing threads
+		{out: []byte(`{"data":{"repository":{"pullRequest":{"id":"PR_X","headRefOid":"newsha999"}}}}`)},
+	}
+	calls := scriptedGHResults(t, results)
+	var buf bytes.Buffer
+	p := &Poster{Out: &buf}
+	target := review.ReviewTarget{Host: review.HostGitHub, Owner: "o", Repo: "r", Number: 7, HeadSHA: "oldsha111"}
+	findings := []review.Finding{{File: "a.go", Line: 1, Severity: review.SeverityHigh, Title: "T", SuggestedComment: "c"}}
+
+	err := p.Submit(context.Background(), target, findings)
+	if err == nil {
+		t.Fatal("Submit must refuse when the PR head moved since fetch")
+	}
+	for _, want := range []string{"oldsha111", "newsha999", "re-run"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("drift error missing %q; got: %v", want, err)
+		}
+	}
+	if len(*calls) != 2 {
+		t.Errorf("no pending review may be created after drift detection; got %d calls", len(*calls))
+	}
+}
