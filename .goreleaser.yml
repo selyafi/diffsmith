@@ -52,10 +52,13 @@ checksum:
   algorithm: sha256
 
 # Each release's notes are read from `CHANGELOG.md` by the workflow via
-# `goreleaser release --release-notes`. The auto-generated changelog
-# section here is suppressed so we don't get two changelogs in the body.
-changelog:
-  disable: true
+# `goreleaser release --release-notes`. Do NOT set `changelog.disable`
+# here: disabling the changelog makes goreleaser skip the notes step
+# entirely — including the --release-notes file — which published every
+# release up to v0.2.1 with an empty body (diffsmith-8jw). The
+# --release-notes flag itself suppresses commit-log generation, so
+# there is no double-changelog risk. The workflow verifies the
+# published body is non-empty after goreleaser runs.
 
 release:
   draft: false

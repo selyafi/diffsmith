@@ -49,3 +49,17 @@ jobs:
           args: release --clean --release-notes=RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Releases v0.1.0–v0.2.1 all published with empty bodies because
+      # changelog.disable silently discarded the --release-notes file
+      # (diffsmith-8jw). The extraction guard above only proves the file
+      # exists; this proves the notes actually reached the release.
+      - name: Verify published release has a non-empty body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          body="$(gh release view "${GITHUB_REF_NAME}" --json body -q .body)"
+          if [ -z "$(echo "$body" | tr -d '[:space:]')" ]; then
+            echo "::error::release ${GITHUB_REF_NAME} published with an empty body"
+            exit 1
+          fi
