@@ -94,3 +94,24 @@ func TestInbox_EmptyStateShowsQuitHint(t *testing.T) {
 		t.Errorf("empty-state view missing 'q quit' hint: %s", view)
 	}
 }
+
+// TestInboxModel_ResetSessionClearsExitState is the diffsmith-qe5
+// regression: the app reuses one InboxModel across tea sessions to keep
+// the cached PR list, so after the first open the stale action/pick
+// made the clean-quit (ActionNone) path unreachable — a
+// teardown-without-keypress replayed the previous open and re-launched
+// a full review. ResetSession must clear exit state, keep the list.
+func TestInboxModel_ResetSessionClearsExitState(t *testing.T) {
+	m := NewInboxModel([]provider.PRSummary{{Number: 5, Title: "x", URL: "https://e/pr/5"}}, "o", "r")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // user opens #5
+	if m.Action() != InboxActionOpen || m.Pick() == nil {
+		t.Fatalf("precondition: enter should set Open+pick; got %v %v", m.Action(), m.Pick())
+	}
+	m.ResetSession()
+	if m.Action() != InboxActionNone {
+		t.Errorf("ResetSession must clear action; got %v", m.Action())
+	}
+	if m.Pick() != nil {
+		t.Errorf("ResetSession must clear pick; got %+v", m.Pick())
+	}
+}

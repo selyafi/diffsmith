@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -39,8 +40,8 @@ import (
 func withFakeTUI(t *testing.T, fake func(*tui.Model) error) {
 	t.Helper()
 	prev := runTUI
-	runTUI = func(loader *tui.LoaderModel, pipeline func(send func(tea.Msg))) error {
-		pipeline(func(msg tea.Msg) { _, _ = loader.Update(msg) })
+	runTUI = func(ctx context.Context, loader *tui.LoaderModel, pipeline func(context.Context, func(tea.Msg))) error {
+		pipeline(ctx, func(msg tea.Msg) { _, _ = loader.Update(msg) })
 		if loaderErr := loader.Err(); loaderErr != nil {
 			return loaderErr
 		}
@@ -1157,5 +1158,121 @@ func TestReviewAllModelsFailedFoldsContextNotesIntoError(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("all-models-failed error missing %q; got:\n%v", want, err)
 		}
+	}
+}
+
+// TestLaunchPipeline_StopCancelsAndJoins is the diffsmith-425
+// regression: when the user quits the TUI mid-load, the pipeline
+// goroutine used to keep running (writing `input`/`runSummary` the
+// main goroutine was concurrently reading, and keeping model CLIs
+// alive on a never-cancelled ctx). stop() must cancel the pipeline's
+// ctx and not return until the goroutine has fully exited, so writes
+// it made happen-before the caller's reads.
+func TestLaunchPipeline_StopCancelsAndJoins(t *testing.T) {
+	sawCancel := make(chan struct{})
+	var wrote string
+	pipeline := func(ctx context.Context, send func(tea.Msg)) {
+		<-ctx.Done() // simulate in-flight work interrupted by quit
+		close(sawCancel)
+		wrote = "pipeline-exited" // must be visible after stop()
+	}
+	stop := launchPipeline(context.Background(), pipeline, func(tea.Msg) {})
+
+	finished := make(chan struct{})
+	go func() { stop(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop() did not cancel the pipeline ctx and join within 2s")
+	}
+	select {
+	case <-sawCancel:
+	default:
+		t.Error("pipeline never observed ctx cancellation")
+	}
+	if wrote != "pipeline-exited" {
+		t.Errorf("write before goroutine exit must be visible after stop(); got %q", wrote)
+	}
+}
+
+// TestLaunchPipeline_StopAfterNaturalExitReturnsImmediately: when the
+// pipeline already finished (the normal full-review path), stop() must
+// be a cheap no-op join, not a hang.
+func TestLaunchPipeline_StopAfterNaturalExitReturnsImmediately(t *testing.T) {
+	ran := make(chan struct{})
+	stop := launchPipeline(context.Background(), func(ctx context.Context, send func(tea.Msg)) {
+		close(ran)
+	}, func(tea.Msg) {})
+	<-ran
+	finished := make(chan struct{})
+	go func() { stop(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop() after natural pipeline exit must return promptly")
+	}
+}
+
+// TestReviewPostFailureStillWritesFindings is the diffsmith-jdm
+// regression: a failed upstream post returned before writeFindings, so
+// the user's only local record of the session — the approved findings
+// and the run summary (with its context notes) — was silently dropped
+// at the exact moment they needed it to retry by hand.
+func TestReviewPostFailureStillWritesFindings(t *testing.T) {
+	stubProv := &stubProvider{supports: func(string) bool { return true }, fetchInput: reviewInputWithSessionDiff(t)}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File: "auth/session.go", Line: 13, Severity: "high",
+				Title: "Survives post failure", SuggestedComment: "keep me", Confidence: 0.9,
+			}},
+		},
+	}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
+	withFakeTUI(t, func(m *tui.Model) error { m.ApproveCurrent(); m.MarkCurrentForPost(); return nil })
+	prev := submitPost
+	submitPost = func(_ context.Context, _ io.Writer, _ review.ReviewTarget, _ []review.Finding, _ bool, _ map[string]string) error {
+		return errors.New("gh: network unreachable")
+	}
+	t.Cleanup(func() { submitPost = prev })
+
+	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetIn(stdinFor("y\n"))
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42"})
+
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "network unreachable") {
+		t.Fatalf("post failure must still surface as the command error; got %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "Survives post failure") {
+		t.Errorf("approved findings must print despite post failure; got:\n%s", got)
+	}
+	if !strings.Contains(got, "Models: codex") {
+		t.Errorf("run summary must print despite post failure; got:\n%s", got)
+	}
+}
+
+// TestWriteFindings_ZeroApprovedWithQuarantineStillDisambiguates is the
+// diffsmith-bqf regression: the "0 of N findings approved." line
+// (diffsmith-14p's disambiguation between "reviewer approved nothing"
+// and "nothing reviewable was shown") was gated on nothing being
+// quarantined, so the one case that most needs disambiguating —
+// candidates shown, none approved, some quarantined — printed neither.
+func TestWriteFindings_ZeroApprovedWithQuarantineStillDisambiguates(t *testing.T) {
+	var buf bytes.Buffer
+	q := []review.Quarantined{{
+		Candidate: review.FindingCandidate{File: "a.go", Line: 9, Title: "off-diff"},
+		Reason:    "line outside hunk",
+	}}
+	writeFindings(&buf, nil, q, 3, "", false)
+	got := buf.String()
+	if !strings.Contains(got, "0 of 3 findings approved.") {
+		t.Errorf("zero-approved line must print despite quarantine; got:\n%s", got)
+	}
+	if !strings.Contains(got, "quarantined") {
+		t.Errorf("quarantine note must still print; got:\n%s", got)
 	}
 }

@@ -26,11 +26,35 @@ import (
 // fake that drives the pipeline synchronously and operates on the inner
 // ReviewModel via tui.LoaderModel.ReviewModel — see withFakeTUI in
 // review_test.go.
-var runTUI = func(loader *tui.LoaderModel, pipeline func(send func(tea.Msg))) error {
+var runTUI = func(ctx context.Context, loader *tui.LoaderModel, pipeline func(context.Context, func(tea.Msg))) error {
 	p := tea.NewProgram(loader, tea.WithAltScreen())
-	go pipeline(func(msg tea.Msg) { p.Send(msg) })
+	stop := launchPipeline(ctx, pipeline, func(msg tea.Msg) { p.Send(msg) })
+	// Join BEFORE the caller reads pipeline-written state (input,
+	// runSummary): the user can quit the TUI mid-load, and without the
+	// cancel+join the goroutine kept mutating those variables while the
+	// caller read them — and kept the model CLIs running on a ctx
+	// nothing cancelled. diffsmith-425.
+	defer stop()
 	_, err := p.Run()
 	return err
+}
+
+// launchPipeline runs pipeline on a ctx derived from the caller's and
+// returns a stop func that cancels that ctx and blocks until the
+// goroutine has exited. Stop is idempotent in effect: after a natural
+// pipeline exit it returns immediately. Split from runTUI so the
+// cancel+join contract is unit-testable without a TTY.
+func launchPipeline(ctx context.Context, pipeline func(context.Context, func(tea.Msg)), send func(tea.Msg)) (stop func()) {
+	pctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pipeline(pctx, send)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // submitPost is the seam between runReview and the GitHub poster. Tests
@@ -292,13 +316,16 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 
 	// The pipeline runs in a goroutine launched by runTUI; it pushes
 	// PhaseStatusMsg as it transitions between fetch/model/validate, and
-	// pushes LoadReadyMsg or LoadErrorMsg at the end. The closure
-	// captures the per-session dependencies; nothing model-state-related
-	// is shared mutably across the goroutine boundary.
+	// pushes LoadReadyMsg or LoadErrorMsg at the end. It writes the
+	// captured `input` and `runSummary`, which is safe ONLY because
+	// runTUI cancels the pipeline ctx and joins the goroutine before
+	// returning (diffsmith-425) — every pipeline write happens-before
+	// the reads below. The ctx parameter is runTUI's derived, cancellable
+	// context; using the outer ctx here would survive a TUI quit.
 	var input *review.ReviewInput
 	var runSummary string // populated by pipeline; read by writeFindings after runTUI returns
 	loader := tui.NewLoaderModel("Fetching diff…")
-	pipeline := func(send func(tea.Msg)) {
+	pipeline := func(ctx context.Context, send func(tea.Msg)) {
 		send(tui.PhaseStatusMsg("Fetching diff…"))
 		var fetchErr error
 		input, fetchErr = p.Fetch(ctx, url)
@@ -394,7 +421,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		runSummary = buildRunSummary(selected.All, surviving, dropped, synthesisLeadName, len(final.Findings), synthesisSkips, contextNotes)
 		send(tui.LoadReadyMsg{Findings: valid, Quarantined: quarantined})
 	}
-	if err := runTUI(loader, pipeline); err != nil {
+	if err := runTUI(ctx, loader, pipeline); err != nil {
 		return err
 	}
 	if loaderErr := loader.Err(); loaderErr != nil {
@@ -406,21 +433,22 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		return nil
 	}
 
+	var postErr error
 	if marked := loader.GetFindingsMarkedForPost(); len(marked) > 0 {
-		var postErr error
 		switch {
 		case flags.printPayload:
 			postErr = (&post.Poster{Out: cmd.OutOrStdout(), OldPaths: renameMapFromFiles(input.Files)}).PrintPayload(input.Target, marked)
 		case confirmPost(cmd, len(marked), input.Target):
 			postErr = submitPost(ctx, cmd.OutOrStdout(), input.Target, marked, flags.repost, renameMapFromFiles(input.Files))
 		}
-		if postErr != nil {
-			return postErr
-		}
 	}
 
+	// The findings listing and run summary print even when the post
+	// failed: they are the user's only local record of the session, and
+	// a transient gh/glab failure is exactly when that record is needed
+	// to retry by hand. diffsmith-jdm.
 	writeFindings(cmd.OutOrStdout(), loader.GetApprovedFindings(), loader.Quarantined(), loader.TotalReviewed(), runSummary, flags.debug)
-	return nil
+	return postErr
 }
 
 // confirmPost prints a one-line preview to cmd.OutOrStdout and reads a
@@ -552,9 +580,12 @@ func writeFindings(w io.Writer, valid []review.Finding, quarantined []review.Qua
 		fmt.Fprintln(w, "No findings.")
 		return
 	}
-	if len(valid) == 0 && len(quarantined) == 0 {
+	// Print the disambiguation line whenever findings were shown and
+	// none approved — including when some candidates were quarantined,
+	// which is the case that most needs telling apart (diffsmith-bqf).
+	// Falls through so the quarantine note below still prints.
+	if len(valid) == 0 && totalReviewed > 0 {
 		fmt.Fprintf(w, "0 of %d findings approved.\n", totalReviewed)
-		return
 	}
 	for _, f := range valid {
 		fmt.Fprintf(w, "%s:%d [%s] (%s, confidence %.2f)\n", f.File, f.Line, f.Severity, f.Model, f.Confidence)

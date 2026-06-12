@@ -138,3 +138,14 @@ func formatAge(t time.Time) string {
 		return fmt.Sprintf("%dw", int(d.Hours()/(24*7)))
 	}
 }
+
+// ResetSession clears the exit state (action, pick) so a reused model
+// can host a fresh Bubble Tea session while keeping the cached list.
+// The app reuses one InboxModel across sessions (spec §7: the list
+// persists between picks); without this reset a teardown-without-
+// keypress after the first open replayed the stale InboxActionOpen and
+// re-launched the previous review. diffsmith-qe5.
+func (m *InboxModel) ResetSession() {
+	m.action = InboxActionNone
+	m.pick = nil
+}

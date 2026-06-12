@@ -86,6 +86,10 @@ func runInboxCommandWithSelected(cmd *cobra.Command, flags *reviewFlags, registr
 		if current == nil {
 			return nil, 0, fmt.Errorf("inbox: lister called before model initialized")
 		}
+		// Clear the previous session's exit state so a teardown without
+		// a keypress reads as a clean quit, not a replay of the last
+		// open. diffsmith-qe5.
+		current.ResetSession()
 		prog := tea.NewProgram(current, tea.WithAltScreen())
 		if _, err := prog.Run(); err != nil {
 			return nil, 0, err
