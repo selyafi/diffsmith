@@ -7,8 +7,13 @@ import (
 
 // Budget caps on the context contribution to a reviewer prompt. The
 // description and each linked-issue body count toward an adapter's input
-// budget (DefaultInputBudgetBytes, 1 MiB); bounding them here guarantees
-// enrichment can never be the reason a review busts the budget and fails.
+// budget (DefaultInputBudgetBytes, 1 MiB); bounding them here caps
+// enrichment's worst-case contribution at ~88 KiB (8 KiB description +
+// 10 × 8 KiB issue bodies). That is a bound, not a headroom guarantee:
+// a diff already within ~88 KiB of the budget can still be pushed over
+// by enrichment (rerun with --no-context or --exclude to verify), and a
+// user-set --input-budget below ~90 KB can be busted by capped context
+// alone. diffsmith-b32.
 const (
 	MaxDescriptionBytes = 8 * 1024
 	MaxIssueBodyBytes   = 8 * 1024

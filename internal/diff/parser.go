@@ -139,6 +139,14 @@ func convertLines(newStart int, body []byte) ([]HunkLine, error) {
 	lineNo := newStart
 	for i, raw := range splitBody(body) {
 		if len(raw) == 0 {
+			// A bare empty line is a context line whose single leading
+			// space was trimmed by the diff's producer — go-diff
+			// deliberately passes these through. It still occupies a
+			// post-image row: dropping it without counting would shift
+			// every later NewLine down by one and misanchor validation
+			// and upstream posting. diffsmith-dsx.
+			out = append(out, HunkLine{Side: SideContext, NewLine: lineNo, Content: ""})
+			lineNo++
 			continue
 		}
 		marker, content := raw[0], raw[1:]

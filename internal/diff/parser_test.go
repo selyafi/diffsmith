@@ -149,3 +149,38 @@ func TestClassifyLineModifiedSimple(t *testing.T) {
 		})
 	}
 }
+
+// TestParse_EmptyContextLineKeepsLineNumbering is the diffsmith-dsx
+// regression: whitespace-trimmed patches store empty context lines as
+// "" instead of " ", and go-diff deliberately passes them through.
+// Skipping them without counting shifted every subsequent NewLine down
+// by one — misanchoring validation and upstream posting, the exact
+// failure convertLines' doc says must never happen silently.
+func TestParse_EmptyContextLineKeepsLineNumbering(t *testing.T) {
+	raw := "diff --git a/f.go b/f.go\n" +
+		"index 1111111..2222222 100644\n" +
+		"--- a/f.go\n" +
+		"+++ b/f.go\n" +
+		"@@ -1,3 +1,4 @@\n" +
+		" a\n" +
+		"\n" + // empty context line, leading space trimmed
+		"+added\n" +
+		" b\n"
+	files, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	lines := files[0].Hunks[0].Lines
+	if len(lines) != 4 {
+		t.Fatalf("want 4 hunk lines (incl. empty context), got %d", len(lines))
+	}
+	if lines[1].Side != SideContext || lines[1].NewLine != 2 {
+		t.Errorf("empty line must be context @2; got side=%v line=%d", lines[1].Side, lines[1].NewLine)
+	}
+	if lines[2].Side != SideAdded || lines[2].NewLine != 3 {
+		t.Errorf("added line must be @3; got side=%v line=%d", lines[2].Side, lines[2].NewLine)
+	}
+	if lines[3].NewLine != 4 {
+		t.Errorf("final context line must be @4; got %d", lines[3].NewLine)
+	}
+}
