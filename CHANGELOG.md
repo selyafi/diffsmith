@@ -4,6 +4,32 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.2.2 — 2026-06-12
+
+### Added
+
+- `--exclude <pattern>` flag (repeatable, on `review`, `inbox`, and
+  bare `diffsmith`): drop files from the review diff before the prompt
+  is built, for diffs dominated by lockfiles, vendored deps, or
+  generated code. Gitignore-lite rules: a trailing `/` excludes a
+  directory tree at any depth (`vendor/`); a pattern without `/`
+  matches basenames anywhere (`*.lock`); anything else is a full-path
+  glob (`internal/gen/*.go`). Renames are excluded when either side
+  matches. Exclusions are surfaced in the run summary (or stderr for
+  `--print-prompt`/`--dry-run`), malformed globs fail up front, and
+  excluding every changed file is a clean error before any model call.
+  The adapters' budget-exceeded hint now points at the flag.
+  (`diffsmith-7k3`)
+
+### Fixed
+
+- GitHub Releases publish with their release notes again:
+  `changelog.disable` in the goreleaser config silently discarded the
+  notes file the workflow extracts from CHANGELOG.md, so every release
+  through v0.2.1 shipped with an empty body (since backfilled). The
+  release workflow now also fails loudly if the published body comes
+  out empty. (`diffsmith-8jw`)
+
 ## v0.2.1 — 2026-06-11
 
 ### Fixed
