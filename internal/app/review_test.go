@@ -987,6 +987,129 @@ func TestReviewUnsupportedURL(t *testing.T) {
 	}
 }
 
+// twoFileSessionDiff extends sampleSessionDiff with a lockfile so
+// --exclude tests have something to drop while auth/session.go line 13
+// stays mappable for the validator.
+const twoFileSessionDiff = sampleSessionDiff + `diff --git a/package-lock.json b/package-lock.json
+index abc9999..def8888 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,1 +1,1 @@
+-"version": "1.0.0"
++"version": "1.0.1"
+`
+
+func reviewInputWithTwoFileDiff(t *testing.T) *review.ReviewInput {
+	t.Helper()
+	in := sampleReviewInput()
+	in.RawDiff = twoFileSessionDiff
+	files, err := diff.Parse(twoFileSessionDiff)
+	if err != nil {
+		t.Fatalf("Parse twoFileSessionDiff: %v", err)
+	}
+	in.Files = files
+	return in
+}
+
+// TestReviewDryRunAppliesExclude: --exclude must act on the bypass path
+// (dry-run / print-prompt), not just the TUI pipeline, so the reported
+// file count reflects what a real run would send.
+func TestReviewDryRunAppliesExclude(t *testing.T) {
+	stub := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: reviewInputWithTwoFileDiff(t),
+	}
+	root, out := newTestRoot(stub)
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--dry-run", "--exclude", "*.json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "fetched 1 file(s)") {
+		t.Errorf("dry-run should count post-exclude files; got:\n%s", got)
+	}
+	if !strings.Contains(got, "--exclude removed 1 of 2") {
+		t.Errorf("exclusion must be surfaced, never silent; got:\n%s", got)
+	}
+}
+
+func TestReviewPrintPromptAppliesExclude(t *testing.T) {
+	stub := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: reviewInputWithTwoFileDiff(t),
+	}
+	root, out := newTestRoot(stub)
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--print-prompt", "--exclude", "*.json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "package-lock.json") {
+		t.Error("excluded file leaked into the printed prompt")
+	}
+	if !strings.Contains(got, "auth/session.go") {
+		t.Error("kept file missing from the printed prompt")
+	}
+}
+
+// TestReviewAllFilesExcludedFailsBeforeModelCall: excluding everything
+// is a clean pre-model error, not an empty review or a model call on an
+// empty diff.
+func TestReviewAllFilesExcludedFailsBeforeModelCall(t *testing.T) {
+	stubProv := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: reviewInputWithTwoFileDiff(t),
+	}
+	mockModel := &stubModel{name: "codex", reviewResult: &review.ModelReviewResult{Model: "codex"}}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
+	withFakeTUI(t, func(*tui.Model) error { return nil })
+
+	root, _ := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--exclude", "*"})
+
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--exclude") {
+		t.Fatalf("want all-excluded error naming --exclude; got %v", err)
+	}
+	if mockModel.reviewHit {
+		t.Error("model must not be invoked when every file is excluded")
+	}
+}
+
+// TestReviewPipelineExcludeNoteReachesRunSummary: on the full TUI path
+// the exclusion note must ride the context-notes channel into the
+// post-session run summary.
+func TestReviewPipelineExcludeNoteReachesRunSummary(t *testing.T) {
+	stubProv := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: reviewInputWithTwoFileDiff(t),
+	}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File: "auth/session.go", Line: 13, Severity: "high",
+				Title: "t", Evidence: "e", SuggestedComment: "c", FixHint: "f", Confidence: 0.9,
+			}},
+		},
+	}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
+	withFakeTUI(t, func(*tui.Model) error { return nil })
+
+	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--exclude", "*.json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "--exclude removed 1 of 2") {
+		t.Errorf("run summary missing exclusion note; got:\n%s", got)
+	}
+}
+
 // fetcherStubProvider is a stubProvider that also implements
 // review.LinkedIssueFetcher, so command-level tests can drive the
 // context-enrichment paths through the real pipeline.

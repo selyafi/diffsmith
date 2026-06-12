@@ -129,6 +129,9 @@ func TestReviewLargeInput(t *testing.T) {
 	if !bytes.Contains([]byte(err.Error()), []byte("exceeds input budget")) {
 		t.Errorf("error doesn't mention budget: %v", err)
 	}
+	if !bytes.Contains([]byte(err.Error()), []byte("--exclude")) {
+		t.Errorf("budget error should point at --exclude: %v", err)
+	}
 }
 
 // TestReviewInvalidJSON verifies Review handles invalid JSON output.

@@ -35,6 +35,8 @@ At startup, diffsmith probes which AI CLIs are installed (`codex`, `claude`, `ge
 
 To sharpen findings, diffsmith also sends the PR/MR description and the acceptance criteria from any issues the PR/MR formally closes (resolved via `gh`/`glab`) so reviewers can flag scope drift and unmet criteria. This is on by default; pass `--no-context` for a diff-only review that withholds the description and skips the linked-issue fetch. Context fetching is never a gate — if it fails, the review proceeds and the reason is surfaced in the run summary.
 
+Large diffs can exceed the per-model input budget (1 MiB by default). Pass `--exclude <pattern>` (repeatable) to drop noise files from the review — lockfiles, vendored deps, generated code — before the prompt is built: a trailing `/` excludes a directory tree at any depth (`vendor/`), a pattern without `/` matches basenames anywhere (`*.lock`), anything else is a full-path glob (`internal/gen/*.go`). Exclusions are surfaced in the run summary, never silent, and excluding every changed file is an error rather than an empty review.
+
 After review, `p` in the TUI marks findings for upstream posting. On quit, diffsmith asks for explicit `y` confirmation, then posts approved findings as inline review threads on the PR/MR. Findings whose `(file, line)` already has a diffsmith thread upstream are skipped with a summary line; pass `--repost` to bypass that dedup gate.
 
 ## Install

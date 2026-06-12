@@ -66,6 +66,29 @@ func registerModelFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
 	cmd.Flags().IntVar(&flags.inputBudget, "input-budget", 0, "override the per-adapter prompt-size cap in bytes (default: 1 MiB per adapter; 0 keeps the default)")
 	cmd.Flags().DurationVar(&flags.modelTimeout, "model-timeout", 10*time.Minute, "per-model wall-clock cap; a model exceeding it is cancelled and dropped from the review (0 disables)")
 	cmd.Flags().BoolVar(&flags.noContext, "no-context", false, "do not send the PR/MR description or fetch linked-issue acceptance criteria to the model (diff-only review)")
+	cmd.Flags().StringArrayVar(&flags.exclude, "exclude", nil, "exclude files from the review diff (repeatable). Patterns: trailing '/' = directory tree at any depth ('vendor/'); no '/' = basename glob ('*.lock'); otherwise full-path glob ('internal/gen/*.go')")
+}
+
+// applyExcludes filters the fetched input per --exclude, mutating it in
+// place. The returned note ("" when nothing was excluded) must reach the
+// user — run summary on the TUI path, stderr on the bypass path — so
+// exclusions are never silent. Excluding every file is an error: the
+// review would be vacuous and a model call a waste.
+func applyExcludes(input *review.ReviewInput, patterns []string) (string, error) {
+	kept, keptRaw, excludedPaths, err := diff.Exclude(input.Files, input.RawDiff, patterns)
+	if err != nil {
+		return "", err
+	}
+	if len(excludedPaths) == 0 {
+		return "", nil
+	}
+	if len(kept) == 0 {
+		return "", fmt.Errorf("all %d changed file(s) matched --exclude; nothing left to review", len(excludedPaths))
+	}
+	removedBytes := len(input.RawDiff) - len(keptRaw)
+	input.Files, input.RawDiff = kept, keptRaw
+	return fmt.Sprintf("--exclude removed %d of %d changed file(s), %d bytes of diff",
+		len(excludedPaths), len(excludedPaths)+len(kept), removedBytes), nil
 }
 
 // renameMapFromFiles extracts the post-image → pre-image rename mapping
@@ -92,6 +115,10 @@ func renameMapFromFiles(files []*diff.DiffFile) map[string]string {
 type reviewFlags struct {
 	dryRun      bool
 	printPrompt bool
+	// exclude holds --exclude patterns applied to the fetched diff
+	// before context enrichment and prompt build, on every entry
+	// point. See applyExcludes for semantics.
+	exclude []string
 	// printSynthesisPrompt prints the multi-model synthesis prompt
 	// (BuildSynthesisPrompt) using stub reviewer outputs, so operators
 	// can inspect the lead model's input — rules, ordering, sentinels,
@@ -198,6 +225,15 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 		if err != nil {
 			return err
 		}
+		// Filter before enrichment so --print-prompt and --dry-run
+		// reflect exactly what a real run would send.
+		excludeNote, err := applyExcludes(input, flags.exclude)
+		if err != nil {
+			return err
+		}
+		if excludeNote != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "diffsmith: %s\n", excludeNote)
+		}
 		// Enrich so --print-prompt reflects exactly what the model will
 		// see (the # Intent section), and --no-context is honored here
 		// too. Notes go to stderr to keep stdout a clean prompt/diff.
@@ -271,6 +307,17 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 			return
 		}
 
+		// --exclude runs before enrichment and prompt build. Unlike
+		// context enrichment this IS fatal on error: a bad pattern or
+		// an everything-excluded result means the user's filter intent
+		// can't be honored, and reviewing the unfiltered diff anyway
+		// would silently ignore it.
+		excludeNote, excludeErr := applyExcludes(input, flags.exclude)
+		if excludeErr != nil {
+			send(tui.LoadErrorMsg{Err: excludeErr})
+			return
+		}
+
 		// diffsmith-144: enrich with the PR/MR description + linked-issue
 		// acceptance criteria (gated by --no-context). Never fatal — any
 		// failure becomes a surfaced note and the review proceeds.
@@ -279,6 +326,9 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 			send(tui.PhaseStatusMsg("Fetching PR/issue context…"))
 		}
 		contextNotes := enrichWithContext(ctx, fetcher, input, flags.noContext)
+		if excludeNote != "" {
+			contextNotes = append([]string{excludeNote}, contextNotes...)
+		}
 
 		send(tui.PhaseStatusMsg("Reviewing with selected models…"))
 		outcomes := runModelsInParallel(ctx, selected.All, input, send, flags.modelTimeout)

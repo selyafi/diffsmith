@@ -396,6 +396,9 @@ func TestSetInputBudget_OverrideTightensCap(t *testing.T) {
 	if !strings.Contains(err.Error(), "exceeds input budget") {
 		t.Errorf("error should mention the budget; got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "--exclude") {
+		t.Errorf("budget error should point at --exclude; got: %v", err)
+	}
 	if !strings.Contains(err.Error(), "1024") {
 		t.Errorf("error should surface the actual budget value (1024) so users can diagnose; got: %v", err)
 	}
