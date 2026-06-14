@@ -90,7 +90,34 @@ func registerModelFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
 	cmd.Flags().IntVar(&flags.inputBudget, "input-budget", 0, "override the per-adapter prompt-size cap in bytes (default: 1 MiB per adapter; 0 keeps the default)")
 	cmd.Flags().DurationVar(&flags.modelTimeout, "model-timeout", 10*time.Minute, "per-model wall-clock cap; a model exceeding it is cancelled and dropped from the review (0 disables)")
 	cmd.Flags().BoolVar(&flags.noContext, "no-context", false, "do not send the PR/MR description or fetch linked-issue acceptance criteria to the model (diff-only review)")
+	cmd.Flags().StringArrayVar(&flags.include, "include", nil, "review only files matching these patterns (repeatable); applied before --exclude, which then carves exceptions out of the kept set. Same pattern rules as --exclude: trailing '/' = directory tree at any depth ('internal/'); no '/' = basename glob ('*.go'); otherwise full-path glob ('internal/app/*.go')")
 	cmd.Flags().StringArrayVar(&flags.exclude, "exclude", nil, "exclude files from the review diff (repeatable). Patterns: trailing '/' = directory tree at any depth ('vendor/'); no '/' = basename glob ('*.lock'); otherwise full-path glob ('internal/gen/*.go')")
+}
+
+// applyIncludes narrows the fetched input to files matching --include,
+// mutating it in place. It is the allowlist counterpart of applyExcludes
+// and runs BEFORE it (see runReviewByURL) so --exclude carves exceptions
+// out of the kept set — the gitignore precedence the flag help promises.
+// The returned note ("" when --include was absent or matched everything)
+// must reach the user so the narrowing is never silent. Matching nothing
+// is an error: the review would be vacuous and a model call a waste.
+func applyIncludes(input *review.ReviewInput, patterns []string) (string, error) {
+	total := len(input.Files)
+	origRawLen := len(input.RawDiff)
+	kept, keptRaw, dropped, err := diff.Include(input.Files, input.RawDiff, patterns)
+	if err != nil {
+		return "", err
+	}
+	if len(dropped) == 0 {
+		// No patterns, or every file matched: nothing was narrowed away.
+		return "", nil
+	}
+	if len(kept) == 0 {
+		return "", fmt.Errorf("no changed file(s) matched --include; nothing left to review")
+	}
+	input.Files, input.RawDiff = kept, keptRaw
+	return fmt.Sprintf("--include kept %d of %d changed file(s), dropped %d bytes of diff",
+		len(kept), total, origRawLen-len(keptRaw)), nil
 }
 
 // applyExcludes filters the fetched input per --exclude, mutating it in
@@ -139,6 +166,11 @@ func renameMapFromFiles(files []*diff.DiffFile) map[string]string {
 type reviewFlags struct {
 	dryRun      bool
 	printPrompt bool
+	// include holds --include patterns applied to the fetched diff
+	// before --exclude (and before context enrichment / prompt build),
+	// on every entry point. Empty means "review everything". See
+	// applyIncludes for semantics.
+	include []string
 	// exclude holds --exclude patterns applied to the fetched diff
 	// before context enrichment and prompt build, on every entry
 	// point. See applyExcludes for semantics.
@@ -250,7 +282,15 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 			return err
 		}
 		// Filter before enrichment so --print-prompt and --dry-run
-		// reflect exactly what a real run would send.
+		// reflect exactly what a real run would send. --include narrows
+		// first, then --exclude carves exceptions out of the kept set.
+		includeNote, err := applyIncludes(input, flags.include)
+		if err != nil {
+			return err
+		}
+		if includeNote != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "diffsmith: %s\n", includeNote)
+		}
 		excludeNote, err := applyExcludes(input, flags.exclude)
 		if err != nil {
 			return err
@@ -334,11 +374,18 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 			return
 		}
 
-		// --exclude runs before enrichment and prompt build. Unlike
-		// context enrichment this IS fatal on error: a bad pattern or
-		// an everything-excluded result means the user's filter intent
-		// can't be honored, and reviewing the unfiltered diff anyway
-		// would silently ignore it.
+		// --include then --exclude run before enrichment and prompt
+		// build. Unlike context enrichment these ARE fatal on error: a
+		// bad pattern, a nothing-included, or an everything-excluded
+		// result means the user's filter intent can't be honored, and
+		// reviewing the unfiltered diff anyway would silently ignore it.
+		// --include narrows first; --exclude carves exceptions out of
+		// the kept set.
+		includeNote, includeErr := applyIncludes(input, flags.include)
+		if includeErr != nil {
+			send(tui.LoadErrorMsg{Err: includeErr})
+			return
+		}
 		excludeNote, excludeErr := applyExcludes(input, flags.exclude)
 		if excludeErr != nil {
 			send(tui.LoadErrorMsg{Err: excludeErr})
@@ -353,8 +400,14 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 			send(tui.PhaseStatusMsg("Fetching PR/issue context…"))
 		}
 		contextNotes := enrichWithContext(ctx, fetcher, input, flags.noContext)
+		// Prepend filter notes so they lead the summary, in the order
+		// the filters ran: --include first, then --exclude. (Prepend
+		// exclude, then include, so include lands at the front.)
 		if excludeNote != "" {
 			contextNotes = append([]string{excludeNote}, contextNotes...)
+		}
+		if includeNote != "" {
+			contextNotes = append([]string{includeNote}, contextNotes...)
 		}
 
 		send(tui.PhaseStatusMsg("Reviewing with selected models…"))

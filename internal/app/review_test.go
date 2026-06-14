@@ -1111,6 +1111,132 @@ func TestReviewPipelineExcludeNoteReachesRunSummary(t *testing.T) {
 	}
 }
 
+// TestReviewDryRunAppliesInclude: --include must narrow the diff on the
+// bypass path (dry-run / print-prompt) too, and surface the narrowing so
+// it is never silent.
+func TestReviewDryRunAppliesInclude(t *testing.T) {
+	stub := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: reviewInputWithTwoFileDiff(t),
+	}
+	root, out := newTestRoot(stub)
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--dry-run", "--include", "*.go"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "fetched 1 file(s)") {
+		t.Errorf("dry-run should count post-include files; got:\n%s", got)
+	}
+	if !strings.Contains(got, "--include kept 1 of 2") {
+		t.Errorf("narrowing must be surfaced, never silent; got:\n%s", got)
+	}
+}
+
+func TestReviewPrintPromptAppliesInclude(t *testing.T) {
+	stub := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: reviewInputWithTwoFileDiff(t),
+	}
+	root, out := newTestRoot(stub)
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--print-prompt", "--include", "*.go"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "package-lock.json") {
+		t.Error("non-included file leaked into the printed prompt")
+	}
+	if !strings.Contains(got, "auth/session.go") {
+		t.Error("included file missing from the printed prompt")
+	}
+}
+
+// TestReviewNoFilesIncludedFailsBeforeModelCall: an --include that
+// matches nothing is a clean pre-model error naming the flag, not an
+// empty review or a model call on an empty diff.
+func TestReviewNoFilesIncludedFailsBeforeModelCall(t *testing.T) {
+	stubProv := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: reviewInputWithTwoFileDiff(t),
+	}
+	mockModel := &stubModel{name: "codex", reviewResult: &review.ModelReviewResult{Model: "codex"}}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
+	withFakeTUI(t, func(*tui.Model) error { return nil })
+
+	root, _ := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--include", "*.rs"})
+
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "no changed file(s) matched --include") {
+		t.Fatalf("want nothing-included error naming --include; got %v", err)
+	}
+	if mockModel.reviewHit {
+		t.Error("model must not be invoked when no file is included")
+	}
+}
+
+// TestReviewPipelineIncludeNoteReachesRunSummary: on the full TUI path
+// the include note must ride the context-notes channel into the
+// post-session run summary.
+func TestReviewPipelineIncludeNoteReachesRunSummary(t *testing.T) {
+	stubProv := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: reviewInputWithTwoFileDiff(t),
+	}
+	mockModel := &stubModel{
+		name: "codex",
+		reviewResult: &review.ModelReviewResult{
+			Model: "codex",
+			Findings: []review.FindingCandidate{{
+				File: "auth/session.go", Line: 13, Severity: "high",
+				Title: "t", Evidence: "e", SuggestedComment: "c", FixHint: "f", Confidence: 0.9,
+			}},
+		},
+	}
+	withFakePicker(t, map[string]model.Model{"codex": mockModel})
+	withFakeTUI(t, func(*tui.Model) error { return nil })
+
+	root, out := newTestRootWithModels(stubProv, map[string]model.Model{"codex": mockModel})
+	root.SetArgs([]string{"review", "https://github.com/owner/repo/pull/42", "--include", "*.go"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "--include kept 1 of 2") {
+		t.Errorf("run summary missing inclusion note; got:\n%s", got)
+	}
+}
+
+// TestReviewIncludeThenExcludeCompose: --include runs first, then
+// --exclude carves exceptions out of the included set (gitignore-style
+// precedence). --include '*' keeps both files; --exclude '*.json' then
+// drops the lockfile, leaving only the source file in the prompt.
+func TestReviewIncludeThenExcludeCompose(t *testing.T) {
+	stub := &stubProvider{
+		supports:   func(string) bool { return true },
+		fetchInput: reviewInputWithTwoFileDiff(t),
+	}
+	root, out := newTestRoot(stub)
+	root.SetArgs([]string{
+		"review", "https://github.com/owner/repo/pull/42", "--print-prompt",
+		"--include", "*", "--exclude", "*.json",
+	})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "package-lock.json") {
+		t.Error("--exclude should carve the lockfile out of the included set")
+	}
+	if !strings.Contains(got, "auth/session.go") {
+		t.Error("included, non-excluded file missing from the printed prompt")
+	}
+}
+
 // fetcherStubProvider is a stubProvider that also implements
 // review.LinkedIssueFetcher, so command-level tests can drive the
 // context-enrichment paths through the real pipeline.

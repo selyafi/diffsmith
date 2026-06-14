@@ -4,6 +4,24 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## Unreleased
+
+### Added
+
+- `--include <pattern>` flag (repeatable, on `review`, `inbox`, and
+  bare `diffsmith`): the allowlist counterpart of `--exclude`. Keeps
+  only files matching at least one pattern and drops the rest before
+  the prompt is built, for reviews that should focus on one area of a
+  large diff. Same gitignore-lite rules as `--exclude` (trailing `/` =
+  directory tree at any depth; no `/` = basename glob; otherwise
+  full-path glob), and renames are kept when either side matches.
+  `--include` runs first, then `--exclude` carves exceptions out of the
+  kept set (`--include 'internal/' --exclude 'internal/gen/'`). The
+  narrowing is surfaced in the run summary (or stderr for
+  `--print-prompt`/`--dry-run`), malformed globs fail up front, and an
+  `--include` that matches no changed file is a clean error before any
+  model call. The adapters' over-budget hint now names both flags.
+
 ## v0.2.2 — 2026-06-12
 
 ### Added
