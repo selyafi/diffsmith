@@ -100,7 +100,7 @@ func (a *Adapter) Synthesize(ctx context.Context, input *review.ReviewInput, res
 // Synthesize (synthesis prompt).
 func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review.ModelReviewResult, error) {
 	if len(prompt) > a.inputBudget {
-		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR, filter files with --exclude, or raise --input-budget",
+		return nil, fmt.Errorf("prompt size %d bytes exceeds input budget %d bytes for %s; review a smaller PR, filter files with --include/--exclude, or raise --input-budget",
 			len(prompt), a.inputBudget, a.Name())
 	}
 

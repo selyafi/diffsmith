@@ -37,6 +37,8 @@ To sharpen findings, diffsmith also sends the PR/MR description and the acceptan
 
 Large diffs can exceed the per-model input budget (1 MiB by default). Pass `--exclude <pattern>` (repeatable) to drop noise files from the review — lockfiles, vendored deps, generated code — before the prompt is built: a trailing `/` excludes a directory tree at any depth (`vendor/`), a pattern without `/` matches basenames anywhere (`*.lock`), anything else is a full-path glob (`internal/gen/*.go`). Exclusions are surfaced in the run summary, never silent, and excluding every changed file is an error rather than an empty review.
 
+`--include <pattern>` (repeatable) is the allowlist counterpart: it keeps only the matching files and drops the rest, using the same pattern rules. It runs first, then `--exclude` carves exceptions out of the kept set — so `--include 'internal/' --exclude 'internal/gen/'` reviews everything under `internal/` except the generated tree. Like exclusions, the narrowing is surfaced in the run summary, and an `--include` that matches no changed file is an error rather than an empty review.
+
 After review, `p` in the TUI marks findings for upstream posting. On quit, diffsmith asks for explicit `y` confirmation, then posts approved findings as inline review threads on the PR/MR. Findings whose `(file, line)` already has a diffsmith thread upstream are skipped with a summary line; pass `--repost` to bypass that dedup gate.
 
 ## Install
