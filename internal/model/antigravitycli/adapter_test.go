@@ -230,6 +230,75 @@ func TestReviewDoesNotAutoApproveTools(t *testing.T) {
 	}
 }
 
+// modelArg extracts the value passed after --model in the first call.
+func modelArg(t *testing.T, calls *[]recordedCall) string {
+	t.Helper()
+	if len(*calls) == 0 {
+		t.Fatal("no recorded agy call")
+	}
+	args := (*calls)[0].args
+	idx := indexOf(args, "--model")
+	if idx < 0 || idx+1 >= len(args) {
+		t.Fatalf("argv missing --model <name>: got %v", args)
+	}
+	return args[idx+1]
+}
+
+// TestReviewPinsDefaultModel: with no override, the adapter pins agy to a
+// specific model rather than relying on agy's session default (which is
+// user/config-dependent and breaks reproducibility). diffsmith-cr-model.
+func TestReviewPinsDefaultModel(t *testing.T) {
+	run, calls := scriptedRunner(t, [][]byte{[]byte(`{"findings":[]}`)})
+	a := New(run)
+	if _, err := a.Review(context.Background(), sampleInput()); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got := modelArg(t, calls); got != DefaultModel {
+		t.Errorf("--model = %q, want the pinned default %q", got, DefaultModel)
+	}
+	if DefaultModel != "Gemini 3.1 Pro (High)" {
+		t.Errorf("DefaultModel = %q, want \"Gemini 3.1 Pro (High)\"", DefaultModel)
+	}
+}
+
+// TestSetModelOverride: SetModel changes the agy model passed in argv,
+// so --antigravity-model / $DIFFSMITH_ANTIGRAVITY_MODEL can pick e.g.
+// Claude Opus 4.6 instead of the Gemini default.
+func TestSetModelOverride(t *testing.T) {
+	run, calls := scriptedRunner(t, [][]byte{[]byte(`{"findings":[]}`)})
+	a := New(run)
+	a.SetModel("Claude Opus 4.6 (Thinking)")
+	if _, err := a.Review(context.Background(), sampleInput()); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got := modelArg(t, calls); got != "Claude Opus 4.6 (Thinking)" {
+		t.Errorf("--model = %q, want the override", got)
+	}
+}
+
+// TestSetModelEmptyIsNoOp: SetModel("") keeps the pinned default rather
+// than passing an empty --model (which agy would reject), mirroring
+// SetInputBudget's no-op-on-zero contract.
+func TestSetModelEmptyIsNoOp(t *testing.T) {
+	run, calls := scriptedRunner(t, [][]byte{[]byte(`{"findings":[]}`)})
+	a := New(run)
+	a.SetModel("")
+	if _, err := a.Review(context.Background(), sampleInput()); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got := modelArg(t, calls); got != DefaultModel {
+		t.Errorf("SetModel(\"\") must keep the default; got --model %q, want %q", got, DefaultModel)
+	}
+}
+
+// TestImplementsModelSetter: the adapter exposes model selection via the
+// ModelSetter capability so the app layer can apply --antigravity-model.
+func TestImplementsModelSetter(t *testing.T) {
+	if _, ok := any(New(nil)).(model.ModelSetter); !ok {
+		t.Error("antigravity Adapter must implement model.ModelSetter")
+	}
+}
+
 func TestReviewParsesFindingsFromOutput(t *testing.T) {
 	response := []byte(`{
 		"findings": [

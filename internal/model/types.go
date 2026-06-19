@@ -68,3 +68,15 @@ type Model = Reviewer
 type InputBudgetSetter interface {
 	SetInputBudget(bytes int)
 }
+
+// ModelSetter is an optional capability for adapters whose backing CLI can
+// run more than one model (currently only antigravity/agy, which exposes
+// Gemini, Claude, and GPT-OSS variants). The app layer type-asserts to
+// this interface and applies --antigravity-model before Review. Adapters
+// that wrap a single-model CLI (codex, claude) don't implement it.
+//
+// Implementations must treat an empty name as a no-op so an unset flag
+// can't blank out the adapter's pinned default.
+type ModelSetter interface {
+	SetModel(name string)
+}
