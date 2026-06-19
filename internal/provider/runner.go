@@ -32,17 +32,18 @@ func DefaultRunner(ctx context.Context, stdin io.Reader, name string, args ...st
 
 // IsolatedRunner returns a Runner that executes each command in a fresh,
 // empty temp directory (removed once the command returns). It exists for
-// the model adapters (diffsmith-4tz): reviewer CLIs like codex/gemini/
-// claude autoload project context from their working directory —
-// codex discovers .agents/skills/*/SKILL.md and may *activate* a project
-// skill (e.g. one whose workflow posts review comments), gemini/claude
-// onboard from AGENTS.md / CLAUDE.md. Running them in a neutral temp dir
-// neutralizes that autoload, which protects diffsmith's no-auto-post
-// guarantee and keeps reviews deterministic. The whole diff is piped via
-// stdin, so reviewers need no access to the caller's cwd.
+// the model adapters (diffsmith-4tz): reviewer CLIs like codex/claude/agy
+// autoload project context from their working directory — codex discovers
+// .agents/skills/*/SKILL.md and may *activate* a project skill (e.g. one
+// whose workflow posts review comments), claude onboards from AGENTS.md /
+// CLAUDE.md, and agy (Antigravity) treats its cwd as a workspace. Running
+// them in a neutral temp dir neutralizes that autoload, which protects
+// diffsmith's no-auto-post guarantee and keeps reviews deterministic. The
+// whole diff is piped via stdin, so reviewers need no access to the
+// caller's cwd.
 //
 // Only the working directory is isolated; user-level config and auth
-// (~/.codex, ~/.gemini, ~/.claude) live under $HOME and are found via the
+// (e.g. ~/.codex, ~/.claude) live under $HOME and are found via the
 // environment, not cwd, so they keep working.
 func IsolatedRunner() Runner {
 	return func(ctx context.Context, stdin io.Reader, name string, args ...string) ([]byte, error) {

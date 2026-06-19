@@ -19,8 +19,10 @@ import (
 //
 //  1. nil leadModel — registry miss (drift between the reviewer's
 //     surviving outcome's Model name and the selected.All set).
-//  2. lead doesn't satisfy model.Synthesizer — review-only adapter
-//     (e.g. antigravity in v1); diffsmith-dvz.7 made this explicit.
+//  2. lead doesn't satisfy model.Synthesizer — a review-only adapter.
+//     All current adapters (codex, claude, antigravity) are full peers,
+//     so this is a defensive guard for any future review-only adapter;
+//     diffsmith-dvz.7 made the skip explicit.
 //  3. Synthesize returned an error — typical: budget bust, parse
 //     failure, network.
 //  4. Synthesize returned (nil, nil) — undefined per the adapter

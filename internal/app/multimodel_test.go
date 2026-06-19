@@ -120,7 +120,7 @@ var _ model.Model = blockingModel{}
 func TestRunModelsInParallel_SlowModelTimesOut(t *testing.T) {
 	models := []model.Model{
 		fakeModel{name: "codex", result: &review.ModelReviewResult{}},
-		blockingModel{name: "gemini", fallback: 500 * time.Millisecond},
+		blockingModel{name: "antigravity", fallback: 500 * time.Millisecond},
 	}
 	results := runModelsInParallel(context.Background(), models, &review.ReviewInput{}, func(tea.Msg) {}, 20*time.Millisecond)
 
@@ -131,7 +131,7 @@ func TestRunModelsInParallel_SlowModelTimesOut(t *testing.T) {
 	if byName["codex"].Err != nil {
 		t.Errorf("fast model codex should succeed; got %v", byName["codex"].Err)
 	}
-	if byName["gemini"].Err == nil {
-		t.Error("slow model gemini should drop out with a timeout error")
+	if byName["antigravity"].Err == nil {
+		t.Error("slow model antigravity should drop out with a timeout error")
 	}
 }

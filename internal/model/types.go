@@ -16,7 +16,7 @@ import (
 
 // Reviewer is the base capability every model-CLI adapter implements:
 // preflight checks, then a single Review call against one diff. Each
-// adapter pairs with exactly one CLI family (codex, claude, gemini,
+// adapter pairs with exactly one CLI family (codex, claude,
 // antigravity).
 //
 // Callers must invoke Preflight before Review so the user sees an
@@ -24,10 +24,10 @@ import (
 // from os/exec.
 //
 // Multi-model synthesis is an OPTIONAL capability layered on top of
-// Reviewer; see [Synthesizer]. Splitting the two means an experimental
-// or review-only adapter (e.g. antigravity in v1, per spike S8b) does
-// not need to carry a fake Synthesize method that only exists to
-// satisfy a composite interface.
+// Reviewer; see [Synthesizer]. Splitting the two means a future
+// review-only adapter would not need to carry a fake Synthesize method
+// that only exists to satisfy a composite interface. (All current
+// adapters — codex, claude, antigravity — are full peers.)
 type Reviewer interface {
 	Name() string
 	Preflight(ctx context.Context) error
@@ -57,9 +57,10 @@ type Model = Reviewer
 // InputBudgetSetter is an optional capability for adapters that cap the
 // prompt size sent to their backing CLI. The app layer type-asserts to
 // this interface and applies a user-supplied --input-budget value
-// before Review runs. Adapters that don't enforce a budget (e.g.
-// antigravity, which never invokes a CLI in v1) don't implement it and
-// are skipped silently by the override loop.
+// before Review runs. An adapter that didn't enforce a budget simply
+// wouldn't implement it and would be skipped silently by the override
+// loop. (All current adapters — codex, claude, antigravity — implement
+// it.)
 //
 // Implementations must treat n <= 0 as a no-op so a missing/zeroed flag
 // can't accidentally turn the budget off and let an arbitrarily large

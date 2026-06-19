@@ -40,7 +40,7 @@ func (e *ParseError) Unwrap() error { return e.Cause }
 //
 // The contract from docs/prompt-contract.md is strict JSON, but reality
 // is that models occasionally wrap the envelope in markdown code fences
-// (gemini) or chatty prose (claude's "Here is the review: ..."). Rather
+// (agy) or chatty prose (claude's "Here is the review: ..."). Rather
 // than rejecting these and failing the whole review, stripWrapper peels
 // any outer wrapper before parsing — it slices to the outermost JSON
 // object delimited by the first `{` and the last `}`. Any other

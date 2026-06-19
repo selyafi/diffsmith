@@ -15,7 +15,7 @@ func TestPicker_DefaultSelectsCodexAndClaude(t *testing.T) {
 	m := mkPicker([]ModelPickerItem{
 		{Name: "codex", Available: true},
 		{Name: "claude", Available: true},
-		{Name: "antigravity", Available: false, Unavailable: "no non-interactive auth"},
+		{Name: "antigravity", Available: false, Unavailable: "agy not on PATH"},
 	})
 	if !m.IsChecked("codex") {
 		t.Error("codex should be checked by default")
@@ -28,39 +28,39 @@ func TestPicker_DefaultSelectsCodexAndClaude(t *testing.T) {
 	}
 }
 
-func TestPicker_DefaultPreChecksGeminiWhenAvailable(t *testing.T) {
+// TestPicker_DefaultPreChecksAntigravityWhenAvailable pins the post-pivot
+// behavior: antigravity is now a working model and is pre-checked when
+// available, taking the third slot gemini vacated. (Before the pivot the
+// picker pre-checked gemini and deliberately excluded antigravity.)
+func TestPicker_DefaultPreChecksAntigravityWhenAvailable(t *testing.T) {
 	m := mkPicker([]ModelPickerItem{
 		{Name: "codex", Available: true},
 		{Name: "claude", Available: true},
-		{Name: "gemini", Available: true},
-		{Name: "antigravity", Available: false, Unavailable: "no non-interactive auth"},
+		{Name: "antigravity", Available: true},
 	})
-	if !m.IsChecked("gemini") {
-		t.Error("gemini should be checked by default when available")
-	}
-	if m.IsChecked("antigravity") {
-		t.Error("antigravity should NOT be checked even when gemini is available")
+	if !m.IsChecked("antigravity") {
+		t.Error("antigravity should be checked by default when available")
 	}
 	got := m.SelectedNames()
-	want := []string{"codex", "claude", "gemini"}
+	want := []string{"codex", "claude", "antigravity"}
 	if len(got) != len(want) {
 		t.Fatalf("SelectedNames length = %d, want %d (got %v)", len(got), len(want), got)
 	}
 	for i, name := range want {
 		if got[i] != name {
-			t.Errorf("SelectedNames[%d] = %q, want %q (priority order: codex > claude > gemini)", i, got[i], name)
+			t.Errorf("SelectedNames[%d] = %q, want %q (priority order: codex > claude > antigravity)", i, got[i], name)
 		}
 	}
 }
 
-func TestPicker_GeminiUncheckedWhenUnavailable(t *testing.T) {
+func TestPicker_AntigravityUncheckedWhenUnavailable(t *testing.T) {
 	m := mkPicker([]ModelPickerItem{
 		{Name: "codex", Available: true},
 		{Name: "claude", Available: true},
-		{Name: "gemini", Available: false, Unavailable: "gemini CLI not on PATH"},
+		{Name: "antigravity", Available: false, Unavailable: "agy not on PATH"},
 	})
-	if m.IsChecked("gemini") {
-		t.Error("gemini unavailable should NOT be pre-checked")
+	if m.IsChecked("antigravity") {
+		t.Error("antigravity unavailable should NOT be pre-checked")
 	}
 }
 

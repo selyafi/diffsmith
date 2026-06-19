@@ -45,11 +45,11 @@ func (f *budgetlessFake) Review(context.Context, *review.ReviewInput) (*review.M
 // TestApplyInputBudget_AppliesToSettersOnly is the diffsmith-uc1 unit:
 // when the user passes --input-budget=N, every selected model that
 // implements InputBudgetSetter must receive SetInputBudget(N) exactly
-// once. Models without the capability (e.g. antigravity in v1) are
-// silently skipped — they don't have a budget to override.
+// once. A model without the capability (here a hypothetical review-only
+// adapter) is silently skipped — it has no budget to override.
 func TestApplyInputBudget_AppliesToSettersOnly(t *testing.T) {
 	setter := &budgetSettingFake{name: "codex"}
-	other := &budgetlessFake{name: "antigravity"}
+	other := &budgetlessFake{name: "review-only-fake"}
 	selected := &model.SelectedModels{All: []model.Model{setter, other}}
 
 	applyInputBudget(selected, 512*1024)

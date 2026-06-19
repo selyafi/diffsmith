@@ -79,10 +79,10 @@ func TestParseFindingsEmpty(t *testing.T) {
 	}
 }
 
-// TestParseFindingsStripsJSONFence verifies that the most common gemini
-// drift — wrapping the JSON envelope in a ```json ... ``` block —
-// is silently stripped and parsed. Without this, gemini reviews fail
-// even when the underlying JSON is structurally valid.
+// TestParseFindingsStripsJSONFence verifies that a common model drift —
+// wrapping the JSON envelope in a ```json ... ``` block — is silently
+// stripped and parsed. Without this, reviews fail even when the
+// underlying JSON is structurally valid.
 func TestParseFindingsStripsJSONFence(t *testing.T) {
 	raw := []byte("```json\n{\"findings\":[]}\n```")
 	got, err := ParseFindings(raw)
