@@ -4,6 +4,24 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.3.1 — 2026-06-19
+
+### Added
+
+- `--antigravity-model` flag (and `$DIFFSMITH_ANTIGRAVITY_MODEL`): choose
+  the model the Antigravity (`agy`) adapter runs — e.g.
+  `Gemini 3.1 Pro (High)`, `Claude Opus 4.6 (Thinking)`, `GPT-OSS 120B
+  (Medium)`. Run `agy models` for the catalog. The flag wins over the env
+  var; an empty value keeps the pinned default.
+
+### Changed
+
+- The Antigravity adapter now pins **`Gemini 3.1 Pro (High)`** by default
+  instead of relying on agy's session default (often `Gemini 3.5 Flash`).
+  This makes reviews reproducible across machines and keeps antigravity a
+  distinct model family (Google) from codex (GPT) and claude (Claude).
+  Override with `--antigravity-model` / `$DIFFSMITH_ANTIGRAVITY_MODEL`.
+
 ## v0.3.0 — 2026-06-19
 
 ### Added

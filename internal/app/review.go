@@ -92,6 +92,7 @@ func registerModelFlowFlags(cmd *cobra.Command, flags *reviewFlags) {
 	cmd.Flags().BoolVar(&flags.noContext, "no-context", false, "do not send the PR/MR description or fetch linked-issue acceptance criteria to the model (diff-only review)")
 	cmd.Flags().StringArrayVar(&flags.include, "include", nil, "review only files matching these patterns (repeatable); applied before --exclude, which then carves exceptions out of the kept set. Same pattern rules as --exclude: trailing '/' = directory tree at any depth ('internal/'); no '/' = basename glob ('*.go'); otherwise full-path glob ('internal/app/*.go')")
 	cmd.Flags().StringArrayVar(&flags.exclude, "exclude", nil, "exclude files from the review diff (repeatable). Patterns: trailing '/' = directory tree at any depth ('vendor/'); no '/' = basename glob ('*.lock'); otherwise full-path glob ('internal/gen/*.go')")
+	cmd.Flags().StringVar(&flags.antigravityModel, "antigravity-model", "", "model for the antigravity (agy) adapter, e.g. \"Gemini 3.1 Pro (High)\" or \"Claude Opus 4.6 (Thinking)\" (default pins \"Gemini 3.1 Pro (High)\"; overrides $DIFFSMITH_ANTIGRAVITY_MODEL; run `agy models` for the catalog)")
 }
 
 // applyIncludes narrows the fetched input to files matching --include,
@@ -210,6 +211,12 @@ type reviewFlags struct {
 	// otherwise block the whole review. Zero disables the cap (inherit
 	// the parent context only). See runModelsInParallel.
 	modelTimeout time.Duration
+	// antigravityModel overrides the agy model used by the antigravity
+	// adapter (e.g. "Claude Opus 4.6 (Thinking)"). Empty keeps the
+	// adapter's pinned DefaultModel; $DIFFSMITH_ANTIGRAVITY_MODEL is the
+	// env fallback. Only the antigravity adapter consumes it
+	// (model.ModelSetter); other adapters ignore it. See applyAntigravityModel.
+	antigravityModel string
 }
 
 func newReviewCmd(registry *provider.Registry, models map[string]model.Model) *cobra.Command {
@@ -344,6 +351,7 @@ func runReviewByURL(ctx context.Context, cmd *cobra.Command, url string, flags *
 	// is visibly local to one block rather than spread across the
 	// pipeline goroutine).
 	applyInputBudget(selected, flags.inputBudget)
+	applyAntigravityModel(selected, flags.antigravityModel)
 
 	// Preflight all selected models before launching the TUI so missing
 	// CLIs surface as clean errors rather than flashing the TUI open and

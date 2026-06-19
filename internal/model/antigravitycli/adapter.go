@@ -18,6 +18,15 @@ import (
 // of model choice. See codexcli for the underlying rationale.
 const DefaultInputBudgetBytes = 1024 * 1024
 
+// DefaultModel is the agy model diffsmith pins by default. agy's own
+// session default is user/config-dependent (often Gemini 3.5 Flash),
+// which would make reviews non-deterministic across machines; pinning a
+// model keeps them reproducible. Gemini 3.1 Pro (High) is a distinct
+// family from codex (GPT) and claude (Claude) for cross-model diversity,
+// with Pro-tier reasoning suited to correctness review. Override via
+// --antigravity-model / $DIFFSMITH_ANTIGRAVITY_MODEL; see `agy models`.
+const DefaultModel = "Gemini 3.1 Pro (High)"
+
 // noDeadlinePrintTimeout is the --print-timeout passed when the call's ctx
 // has no deadline (i.e. --model-timeout 0, documented as "disables the
 // cap"). agy's intrinsic default is 5m, which would cap antigravity while
@@ -50,6 +59,7 @@ type Adapter struct {
 	run         provider.Runner
 	lookPath    func(name string) (string, error)
 	inputBudget int
+	model       string
 }
 
 // New constructs an Adapter. Passing nil uses provider.IsolatedRunner so
@@ -67,6 +77,7 @@ func New(run provider.Runner) *Adapter {
 		run:         run,
 		lookPath:    exec.LookPath,
 		inputBudget: DefaultInputBudgetBytes,
+		model:       DefaultModel,
 	}
 }
 
@@ -79,8 +90,18 @@ func (a *Adapter) SetInputBudget(bytes int) {
 	}
 }
 
+// SetModel overrides the agy model passed via --model. An empty name is
+// ignored so an unset --antigravity-model flag can't blank out the pinned
+// default and make agy reject the invocation (mirrors SetInputBudget).
+func (a *Adapter) SetModel(name string) {
+	if name != "" {
+		a.model = name
+	}
+}
+
 // Name returns the model identifier surfaced to users via the picker and
-// attached to validated findings.
+// attached to validated findings. This is diffsmith's adapter name
+// ("antigravity"), not the underlying agy model (see SetModel/DefaultModel).
 func (a *Adapter) Name() string { return "antigravity" }
 
 // Preflight verifies the agy binary is on PATH. Auth failures (a user who
@@ -120,7 +141,7 @@ func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review
 			len(prompt), a.inputBudget, a.Name())
 	}
 
-	out, err := a.run(ctx, strings.NewReader(prompt), "agy", "--print=-", "--print-timeout", printTimeout(ctx))
+	out, err := a.run(ctx, strings.NewReader(prompt), "agy", "--print=-", "--print-timeout", printTimeout(ctx), "--model", a.model)
 	if err != nil {
 		return nil, fmt.Errorf("antigravity: %w", err)
 	}
@@ -144,4 +165,5 @@ var (
 	_ model.Reviewer          = (*Adapter)(nil)
 	_ model.Synthesizer       = (*Adapter)(nil)
 	_ model.InputBudgetSetter = (*Adapter)(nil)
+	_ model.ModelSetter       = (*Adapter)(nil)
 )

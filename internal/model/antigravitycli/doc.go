@@ -6,10 +6,14 @@
 //
 // agy is driven non-interactively via:
 //
-//	agy --print=- --print-timeout <dur>      (prompt piped via stdin)
+//	agy --print=- --print-timeout <dur> --model <name>   (prompt via stdin)
 //
 // agy's `--print` is a string flag that REQUIRES a value (it is not a
-// boolean toggle); `-` is the conventional stdin marker. When stdin is a
+// boolean toggle); `-` is the conventional stdin marker. agy is
+// multi-model (Gemini, Claude, GPT-OSS variants — see `agy models`); the
+// adapter pins `--model` to DefaultModel so reviews are reproducible
+// rather than depending on agy's user/config session default. Override
+// via SetModel (wired to --antigravity-model / $DIFFSMITH_ANTIGRAVITY_MODEL). When stdin is a
 // pipe, agy reads the prompt from it, so prompts up to the 1 MiB input
 // budget travel via stdin per ADR 0007 rather than argv (past ARG_MAX).
 // Output is raw model text with no envelope, so stdout pipes directly into
