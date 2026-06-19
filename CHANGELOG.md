@@ -4,9 +4,18 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
-## Unreleased
+## v0.3.0 — 2026-06-19
 
 ### Added
+
+- **Antigravity (`agy`) model adapter** — a full peer of the Codex and
+  Claude adapters (reviewer, synthesizer, and input-budget setter).
+  Driven non-interactively via `agy --print=- --print-timeout <dur>`
+  with the prompt piped over stdin; the print-timeout derives from the
+  call's ctx deadline so `--model-timeout` governs antigravity like the
+  other adapters. Requires a one-time interactive `agy` login (the OAuth
+  token then persists). Restores a third model after the Gemini removal
+  below.
 
 - `--include <pattern>` flag (repeatable, on `review`, `inbox`, and
   bare `diffsmith`): the allowlist counterpart of `--exclude`. Keeps
@@ -21,6 +30,14 @@ Semantic Versioning per the same doc.
   `--print-prompt`/`--dry-run`), malformed globs fail up front, and an
   `--include` that matches no changed file is a clean error before any
   model call. The adapters' over-budget hint now names both flags.
+
+### Changed
+
+- **BREAKING:** removed the Gemini (`gemini`) model adapter. Google
+  discontinued the `gemini-cli` free-tier OAuth client, so it could no
+  longer authenticate for free-tier users; Antigravity (`agy`) replaces
+  it as the third model. Selectable models are now `codex`, `claude`,
+  and `antigravity` — anyone scripting `--model gemini` must switch.
 
 ## v0.2.2 — 2026-06-12
 
