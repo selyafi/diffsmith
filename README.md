@@ -10,7 +10,7 @@ Diffsmith has no server. The selected model CLI may still send diffs to its own 
 
 ## Current Status
 
-[v0.1.0-rc1](https://github.com/selyafi/diffsmith/releases/tag/v0.1.0-rc1) released (M8). The product is built end-to-end: GitHub + GitLab providers; Codex, Claude, and Gemini model adapters running in parallel with synthesis via a lead model; three-pane TUI; clipboard/export; inline review-thread posting back to GitHub PRs and GitLab MRs (gated by explicit confirmation); dedup-before-post against existing diffsmith threads; prompt-injection-resilient parser. See [CHANGELOG.md](CHANGELOG.md) for the v0.1.0 release notes.
+[v0.1.0-rc1](https://github.com/selyafi/diffsmith/releases/tag/v0.1.0-rc1) released (M8). The product is built end-to-end: GitHub + GitLab providers; Codex, Claude, and Antigravity model adapters running in parallel with synthesis via a lead model; three-pane TUI; clipboard/export; inline review-thread posting back to GitHub PRs and GitLab MRs (gated by explicit confirmation); dedup-before-post against existing diffsmith threads; prompt-injection-resilient parser. See [CHANGELOG.md](CHANGELOG.md) for the v0.1.0 release notes.
 
 ## Product Thesis
 
@@ -31,7 +31,7 @@ diffsmith review <github-pr-url|gitlab-mr-url>     # review a specific PR/MR
 diffsmith                                          # inbox: pick from your repo's open PRs/MRs
 ```
 
-At startup, diffsmith probes which AI CLIs are installed (`codex`, `claude`, `gemini`) and shows an interactive picker. Any subset can be selected; their findings are merged by a synthesis pass via the highest-priority surviving model (priority order: codex → claude → gemini). `antigravity` (CLI binary: `agy`) is registered but disabled in v1 because the CLI has no non-interactive auth path; see `internal/model/antigravitycli/doc.go`.
+At startup, diffsmith probes which AI CLIs are installed (`codex`, `claude`, and `agy` for Antigravity) and shows an interactive picker. Any subset can be selected; their findings are merged by a synthesis pass via the highest-priority surviving model (priority order: codex → claude → antigravity). The Antigravity adapter requires a one-time interactive `agy` login (after which its OAuth token persists); see `internal/model/antigravitycli/doc.go`.
 
 To sharpen findings, diffsmith also sends the PR/MR description and the acceptance criteria from any issues the PR/MR formally closes (resolved via `gh`/`glab`) so reviewers can flag scope drift and unmet criteria. This is on by default; pass `--no-context` for a diff-only review that withholds the description and skips the linked-issue fetch. Context fetching is never a gate — if it fails, the review proceeds and the reason is surfaced in the run summary.
 
@@ -95,8 +95,8 @@ For repository access:
 
 For AI review:
 
-- `codex`, `claude`, or `gemini` CLI — at least one must be installed and authenticated. The picker shows which are available at startup; all selected models run in parallel and a lead model synthesizes the final findings.
-- (`agy` for Antigravity is not a supported install path in v1; the adapter ships disabled — see "V1 Command" above)
+- `codex`, `claude`, or `agy` (Antigravity) CLI — at least one must be installed and authenticated. The picker shows which are available at startup; all selected models run in parallel and a lead model synthesizes the final findings.
+- `agy` requires a one-time interactive login (run `agy` once); after that its OAuth token persists and diffsmith drives it non-interactively.
 
 ## V1 Workflow
 

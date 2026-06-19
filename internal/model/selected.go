@@ -3,22 +3,18 @@ package model
 import "sort"
 
 // priorityOrder defines the canonical priority for the multi-model
-// flow: codex first, then claude, then gemini, then antigravity, then
-// any unknown names alphabetically after. Used to determine the
-// synthesis lead (highest-priority surviving model among selected).
-//
-// Antigravity sits last because it's an experimental stub (interactive
-// OAuth, spike S8b); gemini fills the third working-model slot.
+// flow: codex first, then claude, then antigravity, then any unknown
+// names alphabetically after. Used to determine the synthesis lead
+// (highest-priority surviving model among selected).
 var priorityOrder = map[string]int{
 	"codex":       0,
 	"claude":      1,
-	"gemini":      2,
-	"antigravity": 3,
+	"antigravity": 2,
 }
 
 // SelectedModels is the user's picker choice carried through the
-// review pipeline. All is sorted by priority (codex > claude > gemini
-// > antigravity). The synthesis-lead-priority concept is encoded in
+// review pipeline. All is sorted by priority (codex > claude >
+// antigravity). The synthesis-lead-priority concept is encoded in
 // the All ordering itself — callers that need "the highest-priority
 // surviving model" iterate All in order; the first match wins.
 type SelectedModels struct {

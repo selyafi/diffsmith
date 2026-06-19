@@ -1,0 +1,14 @@
+{
+  "findings": [
+    {
+      "file": "auth/session.go",
+      "line": 14,
+      "severity": "medium",
+      "title": "Token validation bypass due to SplitN",
+      "evidence": "strings.SplitN(t, \".\", 3) limits the split to 3 substrings. If a token has 4 or more parts (e.g., 'a.b.c.d'), SplitN returns ['a', 'b', 'c.d'], which has a length of 3 and passes the len(parts) != 3 check. The previous implementation using strings.Split(t, \".\") correctly rejected tokens with more than 3 parts.",
+      "suggested_comment": "Using `strings.SplitN(t, \".\", 3)` allows tokens with more than three parts (e.g., `a.b.c.d`) to bypass the `len(parts) != 3` validation, because `SplitN` will return exactly three elements with the remaining parts joined in the third element. Consider reverting to `strings.Split` or explicitly checking that the token has exactly two dots using `strings.Count(t, \".\") == 2` to prevent malformed tokens from passing this check.",
+      "fix_hint": "Revert to strings.Split(t, \".\") or add a check using strings.Count(t, \".\") == 2 to ensure there are no extra sections in the token.",
+      "confidence": 0.95
+    }
+  ]
+}

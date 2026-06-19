@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,35 +28,27 @@ type ModelPickerModel struct {
 }
 
 // priority reflects the synthesis lead priority: codex > claude >
-// gemini > antigravity. Used only for default checking and lead-name
-// display. Antigravity sits last because it's an experimental stub
-// (interactive OAuth, S8b) — Preflight will reject it, so it always
-// renders unavailable.
+// antigravity. Used only for default checking and lead-name display.
 var pickerPriority = map[string]int{
 	"codex":       0,
 	"claude":      1,
-	"gemini":      2,
-	"antigravity": 3,
+	"antigravity": 2,
 }
 
 // NewModelPickerModel constructs a picker with default checks applied:
-// codex, claude, and gemini pre-checked if available; antigravity
-// unchecked. If codex is unavailable, the highest-priority available
-// model is pre-checked alone as a fallback.
+// every known available model (the keys of pickerPriority) is pre-checked.
+// If codex is unavailable, the highest-priority available model is
+// pre-checked alone as a fallback.
 func NewModelPickerModel(items []ModelPickerItem) *ModelPickerModel {
 	// Copy so default-check mutations don't leak into the caller's slice.
 	items = append([]ModelPickerItem(nil), items...)
 	codexOK := false
 	for i, it := range items {
-		if it.Name == "codex" && it.Available {
+		if _, known := pickerPriority[it.Name]; known && it.Available {
 			items[i].checked = true
-			codexOK = true
-		}
-		if it.Name == "claude" && it.Available {
-			items[i].checked = true
-		}
-		if it.Name == "gemini" && it.Available {
-			items[i].checked = true
+			if it.Name == "codex" {
+				codexOK = true
+			}
 		}
 	}
 	if !codexOK {
@@ -66,8 +59,8 @@ func NewModelPickerModel(items []ModelPickerItem) *ModelPickerModel {
 			if !it.Available {
 				continue
 			}
-			pri := pickerPriority[it.Name]
-			if _, known := pickerPriority[it.Name]; !known {
+			pri, known := pickerPriority[it.Name]
+			if !known {
 				pri = len(pickerPriority)
 			}
 			if pri < bestPri {
@@ -182,22 +175,30 @@ func (m *ModelPickerModel) IsChecked(name string) bool {
 	return false
 }
 
-// SelectedNames returns the names of currently-checked items, in
-// priority order (codex > claude > gemini > antigravity > others).
+// SelectedNames returns the names of currently-checked items, in priority
+// order (codex > claude > antigravity > unknown names after). Both the
+// ordering and the known-name set derive from pickerPriority, the single
+// source of truth in this file — no hand-maintained name lists.
 func (m *ModelPickerModel) SelectedNames() []string {
-	names := []string{}
-	for _, pname := range []string{"codex", "claude", "gemini", "antigravity"} {
-		for _, it := range m.items {
-			if it.Name == pname && it.checked {
-				names = append(names, it.Name)
-			}
-		}
+	type ranked struct {
+		name string
+		pri  int
 	}
-	known := map[string]bool{"codex": true, "claude": true, "gemini": true, "antigravity": true}
+	sel := []ranked{}
 	for _, it := range m.items {
-		if it.checked && !known[it.Name] {
-			names = append(names, it.Name)
+		if !it.checked {
+			continue
 		}
+		pri, known := pickerPriority[it.Name]
+		if !known {
+			pri = len(pickerPriority) // unknown names sort after the known ones
+		}
+		sel = append(sel, ranked{it.Name, pri})
+	}
+	sort.SliceStable(sel, func(i, j int) bool { return sel[i].pri < sel[j].pri })
+	names := make([]string, len(sel))
+	for i, r := range sel {
+		names[i] = r.name
 	}
 	return names
 }

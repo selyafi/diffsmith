@@ -12,7 +12,6 @@ import (
 	"github.com/selyafi/diffsmith/internal/model/antigravitycli"
 	"github.com/selyafi/diffsmith/internal/model/claudecli"
 	"github.com/selyafi/diffsmith/internal/model/codexcli"
-	"github.com/selyafi/diffsmith/internal/model/geminicli"
 	"github.com/selyafi/diffsmith/internal/provider"
 	"github.com/selyafi/diffsmith/internal/provider/githubgh"
 	"github.com/selyafi/diffsmith/internal/provider/gitlabglab"
@@ -91,9 +90,9 @@ func newRootCmd() *cobra.Command {
 
 // preflightModels probes each adapter and returns a slice of picker
 // items annotated with availability. Order is stable: codex, claude,
-// gemini, antigravity.
+// antigravity.
 func preflightModels(ctx context.Context, models map[string]model.Model) []tui.ModelPickerItem {
-	order := []string{"codex", "claude", "gemini", "antigravity"}
+	order := []string{"codex", "claude", "antigravity"}
 	items := make([]tui.ModelPickerItem, 0, len(order))
 	for _, name := range order {
 		m, ok := models[name]
@@ -134,7 +133,7 @@ func runPickerForModels(items []tui.ModelPickerItem, models map[string]model.Mod
 		}
 	}
 	if available == 0 {
-		return nil, fmt.Errorf("no review CLIs available; install/auth at least one of: codex, claude, gemini, antigravity")
+		return nil, fmt.Errorf("no review CLIs available; install/auth at least one of: codex, claude, antigravity")
 	}
 
 	picker := tui.NewModelPickerModel(items)
@@ -166,15 +165,14 @@ func defaultRegistry() *provider.Registry {
 }
 
 // defaultModels returns the model registry wired to real CLIs. Codex,
-// Claude, and Gemini are the working v1 adapters. Antigravity (agy) is
-// still registered so a user who selects it sees the actionable
-// Preflight error from spike S8b (no non-interactive auth path) rather
-// than an "unknown model" CLI error; the adapter itself refuses to run.
+// Claude, and Antigravity (agy) are the working adapters, each a full
+// peer (reviewer + synthesizer). The legacy Gemini adapter was removed
+// when Google cut off the gemini-cli free-tier OAuth client and agy
+// (S8b resolved in agy 1.0.9) took the third slot.
 func defaultModels() map[string]model.Model {
 	return map[string]model.Model{
 		"codex":       codexcli.New(nil),
 		"claude":      claudecli.New(nil),
-		"gemini":      geminicli.New(nil),
 		"antigravity": antigravitycli.New(nil),
 	}
 }

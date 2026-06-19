@@ -23,8 +23,8 @@ var schemaJSON []byte
 // calibrated by spike S9 at 256 KiB against 26 real public PRs; raised
 // to 1 MiB (diffsmith-uc1) so realistic medium PRs — including ones the
 // GitHub files-API fallback (diffsmith-5n4) makes reachable — fit
-// without an explicit --input-budget override. Codex/Claude/Gemini all
-// advertise 200K+ token context windows (~600KB-3MB of text); 1 MiB
+// without an explicit --input-budget override. Codex/Claude/Antigravity
+// all advertise 200K+ token context windows (~600KB-3MB of text); 1 MiB
 // sits comfortably below the tightest of those while leaving real
 // PRs reviewable. Users can still tighten via --input-budget when
 // hitting quota or quality cliffs. See docs/model-adapters.md § Diff
@@ -112,7 +112,7 @@ func (a *Adapter) executeWithPrompt(ctx context.Context, prompt string) (*review
 
 	// --skip-git-repo-check: IsolatedRunner executes codex in an empty
 	// temp dir (diffsmith-4tz), which codex refuses as untrusted without
-	// the flag — the gemini adapter's --skip-trust equivalent. The dir
+	// the flag (it dies with "Not inside a trusted directory"). The dir
 	// holds nothing codex could act on; the prompt arrives via stdin.
 	// diffsmith-ce8.
 	out, err := a.run(ctx, strings.NewReader(prompt), "codex", "exec", "--skip-git-repo-check", "--output-schema", schemaPath)

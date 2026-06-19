@@ -1,25 +1,30 @@
-// Package antigravitycli implements the Antigravity model adapter
-// (experimental in v1). The CLI binary is `agy`. Lands in M7.
+// Package antigravitycli implements the Antigravity model adapter. The CLI
+// binary is `agy`. It is a full peer of the codex/claude adapters —
+// reviewer, synthesizer, and input-budget setter.
 //
-// # Status (S8b spike, 2026-05-22)
+// # Invocation
 //
-// `agy --print` (alias `-p` / `--prompt`) is the non-interactive mode.
-// Output is the raw model text with no envelope, so the adapter can pipe
-// stdout directly to `model.ParseFindings` (unlike Gemini's `-o json`
-// which wraps in `{"response": ...}`). Stdin is supported. There is no
-// `--output-format json` flag, so JSON reliability is prompt-engineered
-// — same risk profile as Codex without `--output-schema`.
+// agy is driven non-interactively via:
 //
-// However, `agy` is gated behind interactive browser OAuth on every
-// invocation. Each call without a live session prints a Google login
-// URL and listens on `https://antigravity.google/oauth-callback` with
-// a 30-second timeout. The tokens do not persist across invocations and
-// the CLI does not share auth with the installed Antigravity desktop
-// app (both use the same OAuth client_id but different redirect URIs).
+//	agy --print=- --print-timeout <dur>      (prompt piped via stdin)
 //
-// This makes `agy` unsuitable for non-interactive review in v1. The
-// adapter therefore ships behind a Preflight error per the v1 plan
-// (`model-adapters.md`, `implementation-plan.md` M7), and is excluded
-// from the supported-models list in `--help` and the README until
-// Antigravity provides a persistent-token or API-key auth path.
+// agy's `--print` is a string flag that REQUIRES a value (it is not a
+// boolean toggle); `-` is the conventional stdin marker. When stdin is a
+// pipe, agy reads the prompt from it, so prompts up to the 1 MiB input
+// budget travel via stdin per ADR 0007 rather than argv (past ARG_MAX).
+// Output is raw model text with no envelope, so stdout pipes directly into
+// model.ParseFindings — unlike Gemini's `-o json`, which wrapped output in
+// {"response": …}. There is no --output-schema flag, so JSON reliability
+// is prompt-engineered (the same risk profile as codex without a schema),
+// handled by the defensive parser.
+//
+// # Auth (S8b resolved)
+//
+// Spike S8b (2026-05-22) stubbed this adapter because agy v1.0.0 required
+// interactive browser OAuth on every invocation. agy 1.0.9 fixed that
+// ("Fixed OAuth token persistence and authentication hangs"), so tokens
+// persist across calls and `agy --print` runs non-interactively once the
+// user has logged in. Preflight only checks that `agy` is on PATH; a user
+// who has never authenticated sees agy's own login prompt surfaced at
+// Review time (the runner propagates stderr), matching codex/claude.
 package antigravitycli

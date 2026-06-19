@@ -3,9 +3,10 @@ package app
 import "github.com/selyafi/diffsmith/internal/model"
 
 // applyInputBudget delivers --input-budget=N to every selected model
-// that implements model.InputBudgetSetter. Adapters without the
-// capability (antigravity in v1) are silently skipped — they don't
-// have a budget to override.
+// that implements model.InputBudgetSetter. The type-assertion is a
+// defensive skip path: all current adapters (codex, claude, antigravity)
+// implement the capability, but one that didn't would simply keep its
+// compiled-in default rather than error.
 //
 // budget<=0 means "flag unset / not requested"; in that case we leave
 // every adapter's compiled-in default in place. Surfacing zero as a
