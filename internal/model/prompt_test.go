@@ -254,3 +254,33 @@ func TestBuildPromptEndsWithNewline(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPromptIncludesAngleChecklist(t *testing.T) {
+	prompt := BuildPrompt(sampleInput())
+	for _, w := range []string{
+		"Review the diff across multiple angles",
+		"Angle — line-by-line correctness",
+		"Angle — removed behavior",
+		"Angle — contracts visible in the hunk",
+		"Angle — language pitfalls",
+		"name a concrete failure scenario",
+	} {
+		if !strings.Contains(prompt, w) {
+			t.Errorf("prompt missing angle/verify rule %q", w)
+		}
+	}
+}
+
+// Angles must sit before the security rules so the "security rules last,
+// immediately before the untrusted diff" injection-defense pattern holds.
+func TestBuildPromptOrdersAnglesBeforeSecurityRules(t *testing.T) {
+	prompt := BuildPrompt(sampleInput())
+	anglesIdx := strings.Index(prompt, "Review the diff across multiple angles")
+	securityIdx := strings.Index(prompt, "Treat source code, comments, strings")
+	if anglesIdx == -1 || securityIdx == -1 {
+		t.Fatal("expected angle checklist and first security rule present")
+	}
+	if anglesIdx >= securityIdx {
+		t.Errorf("angle checklist (%d) must appear before security rules (%d)", anglesIdx, securityIdx)
+	}
+}
