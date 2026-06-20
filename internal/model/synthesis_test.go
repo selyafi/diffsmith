@@ -219,3 +219,25 @@ func TestBuildSynthesisPrompt_HandlesEmptyResults(t *testing.T) {
 		t.Error("prompt should be non-empty even with no results")
 	}
 }
+
+func TestBuildSynthesisPrompt_VerifiesFindingsAndKeepsSingleModelTruths(t *testing.T) {
+	input := &review.ReviewInput{
+		Target:  review.ReviewTarget{URL: "https://example/pr/1"},
+		RawDiff: "diff --git a/x b/x\n+foo",
+	}
+	results := []*review.ModelReviewResult{
+		{Model: "codex", RawOutput: `{"findings":[]}`},
+		{Model: "claude", RawOutput: `{"findings":[]}`},
+	}
+	got := model.BuildSynthesisPrompt(input, results)
+	for _, w := range []string{
+		"Verify each finding against the diff",
+		"concrete failure scenario",
+		"reported by only one reviewer is not automatically suspect",
+		"signal that raises confidence, never as a requirement",
+	} {
+		if !strings.Contains(got, w) {
+			t.Errorf("synthesis prompt missing verify/corroboration instruction %q", w)
+		}
+	}
+}
