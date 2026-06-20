@@ -4,6 +4,21 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.3.2 — 2026-06-20
+
+### Changed
+
+- Reviews are now multi-angle and cross-verified, applied to every model
+  (codex, claude, antigravity) and every review — no new flags, no extra
+  model calls. The review prompt asks each model to scan the diff across
+  explicit angles (line-by-line correctness, removed-behavior / dropped
+  guards, in-hunk contract breaks, language pitfalls) and to name a
+  concrete failure scenario for each finding or drop it. When two or more
+  models run, the synthesis pass is now an adversarial verify+merge: it
+  keeps a finding only if it grounds to the diff, and treats agreement
+  between reviewers as a confidence signal, not a requirement (a real
+  single-model finding is kept).
+
 ## v0.3.1 — 2026-06-19
 
 ### Added
