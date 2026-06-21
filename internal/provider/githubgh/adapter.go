@@ -381,48 +381,125 @@ func (a *Adapter) PreflightList(ctx context.Context) error {
 	return nil
 }
 
-type ghPR struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Author struct {
-		Login string `json:"login"`
-	} `json:"author"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	URL       string    `json:"url"`
-	IsDraft   bool      `json:"isDraft"`
+type ghAuthor struct {
+	Login    string `json:"login"`
+	TypeName string `json:"__typename"`
 }
 
-// List enumerates open PRs for the repo.
+type ghPRNode struct {
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	URL       string    `json:"url"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	IsDraft   bool      `json:"isDraft"`
+	Author    ghAuthor  `json:"author"`
+	Comments  struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"comments"`
+	ReviewThreads struct {
+		Nodes []struct {
+			IsResolved bool `json:"isResolved"`
+			Comments   struct {
+				TotalCount int `json:"totalCount"`
+				Nodes      []struct {
+					Author ghAuthor `json:"author"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"reviewThreads"`
+	Reviews struct {
+		Nodes []struct {
+			Author ghAuthor `json:"author"`
+		} `json:"nodes"`
+	} `json:"reviews"`
+}
+
+const ghListQuery = `query($q:String!){
+  search(query:$q, type:ISSUE, first:30){
+    nodes{ ... on PullRequest {
+      number title url updatedAt isDraft
+      author{ login __typename }
+      comments{ totalCount }
+      reviewThreads(first:100){ nodes{
+        isResolved
+        comments(first:100){ totalCount nodes{ author{ login __typename } } }
+      } }
+      reviews(first:100){ nodes{ author{ login __typename } } }
+    } }
+  }
+}`
+
+// List enumerates open PRs for the repo and enriches each row with comment
+// count, resolved/unresolved thread counts, and human commenters, all in a
+// single GraphQL call.
 func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider.PRSummary, error) {
-	args := []string{
-		"pr", "list",
-		"--repo", repo.Owner + "/" + repo.Name,
-		"--state=open",
-		"--json", "number,title,author,updatedAt,url,isDraft",
-		"--limit", "30",
-	}
-	out, err := a.run(ctx, nil, "gh", args...)
+	search := fmt.Sprintf("repo:%s/%s is:pr is:open", repo.Owner, repo.Name)
+	out, err := a.run(ctx, nil, "gh", "api", "graphql", "-f", "query="+ghListQuery, "-f", "q="+search)
 	if err != nil {
-		return nil, fmt.Errorf("gh pr list: %w", err)
+		return nil, fmt.Errorf("gh api graphql (pr list): %w", err)
 	}
-	var raw []ghPR
-	if err := json.Unmarshal(out, &raw); err != nil {
+	var resp struct {
+		Data struct {
+			Search struct {
+				Nodes []ghPRNode `json:"nodes"`
+			} `json:"search"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
 		preview := string(out)
 		if len(preview) > 200 {
 			preview = preview[:200] + "…"
 		}
-		return nil, fmt.Errorf("failed to parse gh output: %w (raw: %s)", err, preview)
+		return nil, fmt.Errorf("failed to parse gh graphql output: %w (raw: %s)", err, preview)
 	}
-	result := make([]provider.PRSummary, 0, len(raw))
-	for _, r := range raw {
-		result = append(result, provider.PRSummary{
-			Number:    r.Number,
-			Title:     r.Title,
-			Author:    r.Author.Login,
-			URL:       r.URL,
-			UpdatedAt: r.UpdatedAt,
-			Draft:     r.IsDraft,
-		})
+	result := make([]provider.PRSummary, 0, len(resp.Data.Search.Nodes))
+	for _, n := range resp.Data.Search.Nodes {
+		s := provider.PRSummary{
+			Number: n.Number, Title: n.Title, Author: n.Author.Login,
+			URL: n.URL, UpdatedAt: n.UpdatedAt, Draft: n.IsDraft, Enriched: true,
+		}
+		s.CommentCount = n.Comments.TotalCount
+		humans := newHumanSet(n.Author.Login)
+		for _, t := range n.ReviewThreads.Nodes {
+			if t.IsResolved {
+				s.ResolvedThreads++
+			} else {
+				s.UnresolvedThreads++
+			}
+			s.CommentCount += t.Comments.TotalCount
+			for _, c := range t.Comments.Nodes {
+				humans.add(c.Author)
+			}
+		}
+		for _, r := range n.Reviews.Nodes {
+			humans.add(r.Author)
+		}
+		s.HumanCommenters = humans.list()
+		result = append(result, s)
 	}
 	return result, nil
 }
+
+// humanSet collects distinct human commenter logins in first-seen order,
+// excluding bots (GraphQL __typename or IsBotLogin fallback) and the PR author.
+type humanSet struct {
+	author string
+	seen   map[string]bool
+	order  []string
+}
+
+func newHumanSet(author string) *humanSet {
+	return &humanSet{author: author, seen: map[string]bool{}}
+}
+
+func (h *humanSet) add(a ghAuthor) {
+	if a.Login == "" || a.Login == h.author || a.TypeName == "Bot" || provider.IsBotLogin(a.Login) {
+		return
+	}
+	if !h.seen[a.Login] {
+		h.seen[a.Login] = true
+		h.order = append(h.order, a.Login)
+	}
+}
+
+func (h *humanSet) list() []string { return h.order }

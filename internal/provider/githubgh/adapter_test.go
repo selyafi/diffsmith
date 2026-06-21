@@ -392,11 +392,58 @@ func TestAdapter_PreflightList_NotAuthenticated(t *testing.T) {
 	}
 }
 
+// TestListEnrichesFromGraphQL verifies that List issues a single `gh api
+// graphql` call and correctly derives CommentCount, thread counts, and
+// HumanCommenters (bot + author excluded).
+func TestListEnrichesFromGraphQL(t *testing.T) {
+	resp := []byte(`{"data":{"search":{"nodes":[
+		{"number":269,"title":"wire systests","url":"https://github.com/o/r/pull/269",
+		 "updatedAt":"2026-06-04T00:00:00Z","isDraft":false,"author":{"login":"shelyafi","__typename":"User"},
+		 "comments":{"totalCount":8},
+		 "reviewThreads":{"nodes":[
+		   {"isResolved":true,"comments":{"totalCount":1,"nodes":[{"author":{"login":"Balvajs","__typename":"User"}}]}},
+		   {"isResolved":false,"comments":{"totalCount":1,"nodes":[{"author":{"login":"copilot","__typename":"Bot"}}]}},
+		   {"isResolved":false,"comments":{"totalCount":1,"nodes":[{"author":{"login":"Balvajs","__typename":"User"}}]}}
+		 ]},
+		 "reviews":{"nodes":[{"author":{"login":"Balvajs","__typename":"User"}},{"author":{"login":"shelyafi","__typename":"User"}}]}}
+	]}}}`)
+	run, calls := scriptedRunner(t, [][]byte{resp})
+	a := New(run)
+
+	got, err := a.List(context.Background(), provider.RepoCoord{Owner: "o", Name: "r"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(*calls) != 1 || (*calls)[0].args[0] != "api" || (*calls)[0].args[1] != "graphql" {
+		t.Fatalf("expected one `gh api graphql` call, got %v", *calls)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 summary, got %d", len(got))
+	}
+	s := got[0]
+	if s.Number != 269 || s.URL == "" || !s.Enriched {
+		t.Errorf("base/enriched wrong: %+v", s)
+	}
+	if s.CommentCount != 11 { // 8 conversation + 3 inline thread comments
+		t.Errorf("CommentCount = %d, want 11", s.CommentCount)
+	}
+	if s.ResolvedThreads != 1 || s.UnresolvedThreads != 2 {
+		t.Errorf("threads = ✔%d/✖%d, want ✔1/✖2", s.ResolvedThreads, s.UnresolvedThreads)
+	}
+	if len(s.HumanCommenters) != 1 || s.HumanCommenters[0] != "Balvajs" {
+		t.Errorf("HumanCommenters = %v, want [Balvajs] (bot + author excluded)", s.HumanCommenters)
+	}
+}
+
+// TestAdapter_List_Success migrated from the old gh-pr-list shape to GraphQL.
+// Verifies that two PRs are correctly mapped from the GraphQL response.
 func TestAdapter_List_Success(t *testing.T) {
-	canned := []byte(`[
-		{"number":13491,"title":"fix: handle empty PR descriptions","author":{"login":"alice"},"updatedAt":"2026-05-20T12:00:00Z","url":"https://github.com/cli/cli/pull/13491","isDraft":false},
-		{"number":13485,"title":"docs: clarify auth","author":{"login":"bob"},"updatedAt":"2026-05-18T09:30:00Z","url":"https://github.com/cli/cli/pull/13485","isDraft":true}
-	]`)
+	canned := []byte(`{"data":{"search":{"nodes":[
+		{"number":13491,"title":"fix: handle empty PR descriptions","author":{"login":"alice","__typename":"User"},"updatedAt":"2026-05-20T12:00:00Z","url":"https://github.com/cli/cli/pull/13491","isDraft":false,
+		 "comments":{"totalCount":0},"reviewThreads":{"nodes":[]},"reviews":{"nodes":[]}},
+		{"number":13485,"title":"docs: clarify auth","author":{"login":"bob","__typename":"User"},"updatedAt":"2026-05-18T09:30:00Z","url":"https://github.com/cli/cli/pull/13485","isDraft":true,
+		 "comments":{"totalCount":0},"reviewThreads":{"nodes":[]},"reviews":{"nodes":[]}}
+	]}}}`)
 	run, calls := scriptedRunner(t, [][]byte{canned})
 	a := New(run)
 
@@ -413,17 +460,13 @@ func TestAdapter_List_Success(t *testing.T) {
 	if got[1].Number != 13485 || got[1].Author != "bob" || !got[1].Draft {
 		t.Errorf("row 1 mismatch: %+v", got[1])
 	}
-	if got := (*calls)[0].args; got[0] != "pr" || got[1] != "list" {
-		t.Errorf("expected gh pr list, got %v", got)
-	}
-	gotArgs := (*calls)[0].args
-	if !contains(gotArgs, "--repo") || !contains(gotArgs, "cli/cli") {
-		t.Errorf("expected --repo cli/cli in args, got %v", gotArgs)
+	if args := (*calls)[0].args; args[0] != "api" || args[1] != "graphql" {
+		t.Errorf("expected gh api graphql, got %v", args)
 	}
 }
 
 func TestAdapter_List_Empty(t *testing.T) {
-	run, _ := scriptedRunner(t, [][]byte{[]byte(`[]`)})
+	run, _ := scriptedRunner(t, [][]byte{[]byte(`{"data":{"search":{"nodes":[]}}}`)})
 	a := New(run)
 	got, err := a.List(context.Background(), provider.RepoCoord{Host: "github.com", Owner: "x", Name: "y"})
 	if err != nil {
@@ -435,7 +478,7 @@ func TestAdapter_List_Empty(t *testing.T) {
 }
 
 func TestAdapter_List_MalformedJSON(t *testing.T) {
-	run, _ := scriptedRunner(t, [][]byte{[]byte(`{"not":"an array"}`)})
+	run, _ := scriptedRunner(t, [][]byte{[]byte(`not-json-at-all`)})
 	a := New(run)
 	if _, err := a.List(context.Background(), provider.RepoCoord{Host: "github.com", Owner: "x", Name: "y"}); err == nil {
 		t.Fatal("expected error on malformed JSON")
