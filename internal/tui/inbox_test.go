@@ -115,3 +115,36 @@ func TestInboxModel_ResetSessionClearsExitState(t *testing.T) {
 		t.Errorf("ResetSession must clear pick; got %+v", m.Pick())
 	}
 }
+
+func TestInbox_RendersEnrichmentSegment(t *testing.T) {
+	m := mkInbox([]provider.PRSummary{{
+		Number: 269, Title: "wire systests", Author: "shelyafi",
+		CommentCount: 10, ResolvedThreads: 9, UnresolvedThreads: 3,
+		HumanCommenters: []string{"Balvajs"}, Enriched: true,
+	}})
+	v := m.View()
+	for _, want := range []string{"💬10", "✔9", "✖3", "by:Balvajs"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view missing %q\n%s", want, v)
+		}
+	}
+}
+
+func TestInbox_UnenrichedRowShowsQuestionMarks(t *testing.T) {
+	m := mkInbox([]provider.PRSummary{{Number: 9, Title: "x", Author: "a", Enriched: false}})
+	v := m.View()
+	if !strings.Contains(v, "💬?") {
+		t.Errorf("unenriched row should render 💬?; got:\n%s", v)
+	}
+	if !strings.Contains(v, "thread data unavailable") {
+		t.Errorf("view should note unavailable rows; got:\n%s", v)
+	}
+}
+
+func TestInbox_NoHumanCommentersShowsDash(t *testing.T) {
+	m := mkInbox([]provider.PRSummary{{Number: 5, Title: "y", Author: "a",
+		CommentCount: 1, Enriched: true}})
+	if !strings.Contains(m.View(), "by:—") {
+		t.Errorf("row with no human commenters should render by:—; got:\n%s", m.View())
+	}
+}

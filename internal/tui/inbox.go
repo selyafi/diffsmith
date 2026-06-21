@@ -11,6 +11,8 @@ import (
 	"github.com/selyafi/diffsmith/internal/provider"
 )
 
+var warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9")) // bright red
+
 // InboxAction encodes how the user exited the inbox screen. The
 // top-level loop in app/inbox.go switches on this to decide whether to
 // open a review, refresh the list, or quit the program.
@@ -45,6 +47,23 @@ func NewInboxModel(summaries []provider.PRSummary, owner, name string) *InboxMod
 }
 
 func (m *InboxModel) Init() tea.Cmd { return nil }
+
+// enrichSegment renders the per-row enrichment: 💬count ✔res/✖unres by:humans.
+// An unenriched row renders question marks instead of fake zeros.
+func enrichSegment(s provider.PRSummary) string {
+	if !s.Enriched {
+		return "💬?  ✔?/✖?  ?"
+	}
+	unres := fmt.Sprintf("✖%d", s.UnresolvedThreads)
+	if s.UnresolvedThreads > 0 {
+		unres = warnStyle.Render(unres)
+	}
+	by := "by:—"
+	if len(s.HumanCommenters) > 0 {
+		by = "by:" + strings.Join(s.HumanCommenters, ",")
+	}
+	return fmt.Sprintf("💬%d  ✔%d/%s  %s", s.CommentCount, s.ResolvedThreads, unres, by)
+}
 
 func (m *InboxModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -92,18 +111,28 @@ func (m *InboxModel) View() string {
 		if i == m.selected {
 			marker = "▸ "
 		}
-		displayTitle := truncate(s.Title, 40)
+		displayTitle := truncate(s.Title, 32)
 		draft := ""
 		if s.Draft {
 			draft = " [d]"
 		}
-		line := fmt.Sprintf("%s#%d  %s  %s  %s%s",
-			marker, s.Number, displayTitle, s.Author, formatAge(s.UpdatedAt), draft)
+		line := fmt.Sprintf("%s#%d  %s  @%s  %s  %s%s",
+			marker, s.Number, displayTitle, s.Author, enrichSegment(s), formatAge(s.UpdatedAt), draft)
 		if i == m.selected {
 			b.WriteString(rowSelectedStyle.Render(line) + "\n")
 		} else {
 			b.WriteString(line + "\n")
 		}
+	}
+
+	unavailable := 0
+	for _, s := range m.summaries {
+		if !s.Enriched {
+			unavailable++
+		}
+	}
+	if unavailable > 0 {
+		b.WriteString(footerStyle.Render(fmt.Sprintf("  (%d row(s): thread data unavailable)", unavailable)) + "\n")
 	}
 
 	footer := footerStyle.Render("↑↓ navigate  |  enter open  |  r refresh  |  q quit")
