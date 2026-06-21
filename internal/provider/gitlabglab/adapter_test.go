@@ -606,6 +606,47 @@ func TestListEnrichesFromDiscussions(t *testing.T) {
 	}
 }
 
+// TestListEnrichesDiscussionsWithHostname verifies that when a non-empty Host
+// is supplied, the discussions API call carries --hostname so self-hosted
+// GitLab instances are routed correctly. diffsmith-1bk.
+func TestListEnrichesDiscussionsWithHostname(t *testing.T) {
+	mrList := []byte(`[{"iid":5,"title":"add feature","author":{"username":"alice"},
+		"updated_at":"2026-06-18T00:00:00Z","web_url":"https://gitlab.example.com/o/r/-/merge_requests/5",
+		"draft":false,"user_notes_count":0}]`)
+	discussions := []byte(`[]`)
+
+	var capturedDiscArgs []string
+	run := func(_ context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
+		for _, a := range args {
+			if strings.Contains(a, "discussions") {
+				capturedDiscArgs = append([]string(nil), args...)
+				return discussions, nil
+			}
+		}
+		// mr list call
+		return mrList, nil
+	}
+	a := New(provider.Runner(run))
+
+	_, err := a.List(context.Background(), provider.RepoCoord{Host: "gitlab.example.com", Owner: "o", Name: "r"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if capturedDiscArgs == nil {
+		t.Fatal("expected a discussions call but none was recorded")
+	}
+	found := false
+	for i, arg := range capturedDiscArgs {
+		if arg == "--hostname" && i+1 < len(capturedDiscArgs) && capturedDiscArgs[i+1] == "gitlab.example.com" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("discussions call must include --hostname gitlab.example.com; got args %v", capturedDiscArgs)
+	}
+}
+
 // TestList_PerMRDiscussionFailure verifies that when one MR's discussions call
 // fails, that row is marked Enriched=false with its base fields (Number,
 // Author, CommentCount) intact, while the other MR still enriches successfully.

@@ -463,6 +463,12 @@ func TestAdapter_List_Success(t *testing.T) {
 	if args := (*calls)[0].args; args[0] != "api" || args[1] != "graphql" {
 		t.Errorf("expected gh api graphql, got %v", args)
 	}
+	// The repo-scoping query must reach the GraphQL call so results are
+	// filtered to the target repo (not all open PRs the token can see).
+	allArgs := strings.Join((*calls)[0].args, " ")
+	if !strings.Contains(allArgs, "q=repo:cli/cli is:pr is:open") {
+		t.Errorf("GraphQL call must include repo-scoped query; args: %v", (*calls)[0].args)
+	}
 }
 
 func TestAdapter_List_Empty(t *testing.T) {

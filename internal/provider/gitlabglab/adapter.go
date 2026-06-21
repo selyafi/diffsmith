@@ -252,6 +252,12 @@ func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider
 		"--output", "json",
 		"--per-page", "30",
 	}
+	// Pin the host so self-hosted GitLab instances don't fall through to
+	// glab's default host. Mirrors the --hostname guard in enrichMR and
+	// FetchLinkedIssues. diffsmith-1bk.
+	if repo.Host != "" {
+		args = append(args, "--hostname", repo.Host)
+	}
 	out, err := a.run(ctx, nil, "glab", args...)
 	if err != nil {
 		return nil, fmt.Errorf("glab mr list: %w", err)
@@ -318,6 +324,8 @@ type glDiscussion struct {
 // resolvable-discussion counts plus human commenter usernames (first-seen
 // order, excluding system notes, bots, and the MR author).
 func (a *Adapter) enrichMR(ctx context.Context, host, projectPath string, iid int, author string) (resolved, unresolved int, humans []string, err error) {
+	// per_page=100 is a deliberate display-only cap; realistic MRs are well
+	// under it. Full pagination is a tracked follow-up.
 	path := fmt.Sprintf("projects/%s/merge_requests/%d/discussions?per_page=100", projectPath, iid)
 	args := []string{"api", path}
 	if host != "" {

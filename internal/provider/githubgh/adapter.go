@@ -414,6 +414,8 @@ type ghPRNode struct {
 	} `json:"reviews"`
 }
 
+// first:100 on reviewThreads/comments/reviews is a deliberate display-only
+// cap; realistic PRs are well under it. Full pagination is a tracked follow-up.
 const ghListQuery = `query($q:String!){
   search(query:$q, type:ISSUE, first:30){
     nodes{ ... on PullRequest {
@@ -454,6 +456,11 @@ func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider
 	}
 	result := make([]provider.PRSummary, 0, len(resp.Data.Search.Nodes))
 	for _, n := range resp.Data.Search.Nodes {
+		// Skip null/empty GraphQL nodes (null node in union → zero-value struct).
+		// is:pr makes this rare but the guard is cheap defensiveness.
+		if n.Number == 0 {
+			continue
+		}
 		s := provider.PRSummary{
 			Number: n.Number, Title: n.Title, Author: n.Author.Login,
 			URL: n.URL, UpdatedAt: n.UpdatedAt, Draft: n.IsDraft, Enriched: true,
