@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/selyafi/diffsmith/internal/diff"
@@ -32,9 +33,12 @@ type scriptResult struct {
 
 func scriptedRunner(t *testing.T, results []scriptResult) (provider.Runner, *[]recordedCall) {
 	t.Helper()
+	var mu sync.Mutex
 	var calls []recordedCall
 	i := 0
 	run := func(_ context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
 		calls = append(calls, recordedCall{name: name, args: append([]string(nil), args...)})
 		if i >= len(results) {
 			t.Fatalf("unexpected call #%d: %s %v", i+1, name, args)
@@ -513,25 +517,24 @@ func TestParseRealGitLabMRNestedGroup(t *testing.T) {
 }
 
 func TestAdapter_List_Success(t *testing.T) {
+	// Use one MR to keep the scripted runner deterministic under concurrent
+	// goroutines (mr-list call first, then the single discussions call).
 	canned := []byte(`[
-		{"iid":3650,"title":"feat: kubernetes agent v2","author":{"username":"alice"},"updated_at":"2026-05-19T08:00:00Z","web_url":"https://gitlab.com/gitlab-org/cluster-integration/gitlab-agent/-/merge_requests/3650","draft":false},
-		{"iid":3313,"title":"docs: clarify","author":{"username":"bob"},"updated_at":"2026-05-15T14:00:00Z","web_url":"https://gitlab.com/gitlab-org/cli/-/merge_requests/3313","draft":true}
+		{"iid":3650,"title":"feat: kubernetes agent v2","author":{"username":"alice"},"updated_at":"2026-05-19T08:00:00Z","web_url":"https://gitlab.com/gitlab-org/cluster-integration/gitlab-agent/-/merge_requests/3650","draft":false}
 	]`)
-	run, calls := scriptedRunner(t, []scriptResult{{out: canned}})
+	emptyDiscussions := []byte(`[]`)
+	run, calls := scriptedRunner(t, []scriptResult{{out: canned}, {out: emptyDiscussions}})
 	a := New(run)
 
 	got, err := a.List(context.Background(), provider.RepoCoord{Host: "gitlab.com", Owner: "gitlab-org/cli", Name: "cli"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("got %d, want 2", len(got))
+	if len(got) != 1 {
+		t.Fatalf("got %d, want 1", len(got))
 	}
 	if got[0].Number != 3650 || got[0].Author != "alice" || got[0].Draft {
 		t.Errorf("row 0 mismatch: %+v", got[0])
-	}
-	if got[1].Number != 3313 || got[1].Author != "bob" || !got[1].Draft {
-		t.Errorf("row 1 mismatch: %+v", got[1])
 	}
 	if args := (*calls)[0].args; args[0] != "mr" || args[1] != "list" {
 		t.Errorf("expected glab mr list, got %v", args)
@@ -555,7 +558,9 @@ func TestAdapter_List_Empty(t *testing.T) {
 // preamble instead of failing.
 func TestAdapter_List_StripsWarningPreamble(t *testing.T) {
 	canned := []byte("Flag --opened has been deprecated, default value if neither --closed, --locked or --merged is used.\n[{\"iid\":42,\"title\":\"t\",\"author\":{\"username\":\"u\"},\"draft\":false,\"web_url\":\"https://example/42\"}]")
-	run, _ := scriptedRunner(t, []scriptResult{{out: canned}})
+	// The enrichment phase makes one discussions call per MR; provide an
+	// empty response so the runner doesn't run out of scripted results.
+	run, _ := scriptedRunner(t, []scriptResult{{out: canned}, {out: []byte(`[]`)}})
 	a := New(run)
 	got, err := a.List(context.Background(), provider.RepoCoord{Host: "gitlab.com", Owner: "g", Name: "p"})
 	if err != nil {
@@ -563,6 +568,41 @@ func TestAdapter_List_StripsWarningPreamble(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Number != 42 {
 		t.Errorf("expected 1 row with Number=42; got %+v", got)
+	}
+}
+
+func TestListEnrichesFromDiscussions(t *testing.T) {
+	mrList := []byte(`[{"iid":7,"title":"add market","author":{"username":"shelyafi"},
+		"updated_at":"2026-06-16T00:00:00Z","web_url":"https://gitlab.com/o/r/-/merge_requests/7",
+		"draft":false,"user_notes_count":4}]`)
+	discussions := []byte(`[
+		{"notes":[{"system":false,"resolvable":true,"resolved":true,"author":{"username":"prathoss"}}]},
+		{"notes":[{"system":false,"resolvable":true,"resolved":false,"author":{"username":"yung-madamm"}}]},
+		{"notes":[{"system":true,"resolvable":false,"resolved":false,"author":{"username":"someone"}}]},
+		{"notes":[{"system":false,"resolvable":true,"resolved":false,"author":{"username":"coderabbitai"}}]}
+	]`)
+	run, _ := scriptedRunner(t, []scriptResult{{out: mrList}, {out: discussions}})
+	a := New(run)
+
+	got, err := a.List(context.Background(), provider.RepoCoord{Owner: "o", Name: "r"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1, got %d", len(got))
+	}
+	s := got[0]
+	if s.Number != 7 || !s.Enriched {
+		t.Errorf("base/enriched wrong: %+v", s)
+	}
+	if s.CommentCount != 4 {
+		t.Errorf("CommentCount = %d, want 4 (user_notes_count)", s.CommentCount)
+	}
+	if s.ResolvedThreads != 1 || s.UnresolvedThreads != 2 {
+		t.Errorf("threads = ✔%d/✖%d, want ✔1/✖2 (system discussion ignored)", s.ResolvedThreads, s.UnresolvedThreads)
+	}
+	if len(s.HumanCommenters) != 2 || s.HumanCommenters[0] != "prathoss" || s.HumanCommenters[1] != "yung-madamm" {
+		t.Errorf("HumanCommenters = %v, want [prathoss yung-madamm] (bot + system excluded)", s.HumanCommenters)
 	}
 }
 

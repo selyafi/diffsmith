@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/selyafi/diffsmith/internal/diff"
@@ -229,15 +230,21 @@ type glabMR struct {
 	Author struct {
 		Username string `json:"username"`
 	} `json:"author"`
-	UpdatedAt time.Time `json:"updated_at"`
-	WebURL    string    `json:"web_url"`
-	Draft     bool      `json:"draft"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	WebURL         string    `json:"web_url"`
+	Draft          bool      `json:"draft"`
+	UserNotesCount int       `json:"user_notes_count"`
 }
 
 // List enumerates open MRs for the repo via `glab mr list`. Omitting
 // `--opened` (deprecated as of glab v1.x) inherits the default "open"
 // behavior without triggering the deprecation warning that glab writes
 // to stdout, mixed with the JSON.
+//
+// After the initial listing, List fetches per-MR discussion data
+// bounded-concurrently (cap 6) to populate enrichment fields. A
+// per-MR discussions fetch failure marks that row Enriched=false with
+// base fields intact; all other rows continue to be enriched.
 func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider.PRSummary, error) {
 	args := []string{
 		"mr", "list",
@@ -264,16 +271,88 @@ func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider
 		}
 		return nil, fmt.Errorf("failed to parse glab output: %w (raw: %s)", err, preview)
 	}
-	result := make([]provider.PRSummary, 0, len(raw))
-	for _, r := range raw {
-		result = append(result, provider.PRSummary{
-			Number:    r.IID,
-			Title:     r.Title,
-			Author:    r.Author.Username,
-			URL:       r.WebURL,
-			UpdatedAt: r.UpdatedAt,
-			Draft:     r.Draft,
-		})
+
+	const enrichConcurrency = 6
+	projectPath := url.PathEscape(repo.Owner + "/" + repo.Name)
+	result := make([]provider.PRSummary, len(raw))
+	sem := make(chan struct{}, enrichConcurrency)
+	var wg sync.WaitGroup
+	for i, r := range raw {
+		result[i] = provider.PRSummary{
+			Number: r.IID, Title: r.Title, Author: r.Author.Username,
+			URL: r.WebURL, UpdatedAt: r.UpdatedAt, Draft: r.Draft,
+			CommentCount: r.UserNotesCount,
+		}
+		wg.Add(1)
+		go func(i, iid int, author string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			res, unres, humans, err := a.enrichMR(ctx, projectPath, iid, author)
+			if err != nil {
+				result[i].Enriched = false // base fields already set
+				return
+			}
+			result[i].ResolvedThreads = res
+			result[i].UnresolvedThreads = unres
+			result[i].HumanCommenters = humans
+			result[i].Enriched = true
+		}(i, r.IID, r.Author.Username)
 	}
+	wg.Wait()
 	return result, nil
+}
+
+type glDiscussion struct {
+	Notes []struct {
+		System     bool `json:"system"`
+		Resolvable bool `json:"resolvable"`
+		Resolved   bool `json:"resolved"`
+		Author     struct {
+			Username string `json:"username"`
+		} `json:"author"`
+	} `json:"notes"`
+}
+
+// enrichMR fetches one MR's discussions and returns resolved/unresolved
+// resolvable-discussion counts plus human commenter usernames (first-seen
+// order, excluding system notes, bots, and the MR author).
+func (a *Adapter) enrichMR(ctx context.Context, projectPath string, iid int, author string) (resolved, unresolved int, humans []string, err error) {
+	path := fmt.Sprintf("projects/%s/merge_requests/%d/discussions?per_page=100", projectPath, iid)
+	out, err := a.run(ctx, nil, "glab", "api", path)
+	if err != nil {
+		return 0, 0, nil, fmt.Errorf("glab api discussions (MR %d): %w", iid, err)
+	}
+	if jsonStart := bytes.IndexByte(out, '['); jsonStart > 0 {
+		out = out[jsonStart:]
+	}
+	var discs []glDiscussion
+	if err := json.Unmarshal(out, &discs); err != nil {
+		return 0, 0, nil, fmt.Errorf("parse discussions (MR %d): %w", iid, err)
+	}
+	seen := map[string]bool{}
+	for _, d := range discs {
+		resolvable, allResolved := false, true
+		for _, n := range d.Notes {
+			if n.Resolvable {
+				resolvable = true
+				if !n.Resolved {
+					allResolved = false
+				}
+			}
+			u := n.Author.Username
+			if !n.System && u != "" && u != author && !provider.IsBotLogin(u) && !seen[u] {
+				seen[u] = true
+				humans = append(humans, u)
+			}
+		}
+		if resolvable {
+			if allResolved {
+				resolved++
+			} else {
+				unresolved++
+			}
+		}
+	}
+	return resolved, unresolved, humans, nil
 }
