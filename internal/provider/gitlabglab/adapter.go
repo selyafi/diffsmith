@@ -288,7 +288,7 @@ func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			res, unres, humans, err := a.enrichMR(ctx, projectPath, iid, author)
+			res, unres, humans, err := a.enrichMR(ctx, repo.Host, projectPath, iid, author)
 			if err != nil {
 				result[i].Enriched = false // base fields already set
 				return
@@ -317,9 +317,13 @@ type glDiscussion struct {
 // enrichMR fetches one MR's discussions and returns resolved/unresolved
 // resolvable-discussion counts plus human commenter usernames (first-seen
 // order, excluding system notes, bots, and the MR author).
-func (a *Adapter) enrichMR(ctx context.Context, projectPath string, iid int, author string) (resolved, unresolved int, humans []string, err error) {
+func (a *Adapter) enrichMR(ctx context.Context, host, projectPath string, iid int, author string) (resolved, unresolved int, humans []string, err error) {
 	path := fmt.Sprintf("projects/%s/merge_requests/%d/discussions?per_page=100", projectPath, iid)
-	out, err := a.run(ctx, nil, "glab", "api", path)
+	args := []string{"api", path}
+	if host != "" {
+		args = append(args, "--hostname", host)
+	}
+	out, err := a.run(ctx, nil, "glab", args...)
 	if err != nil {
 		return 0, 0, nil, fmt.Errorf("glab api discussions (MR %d): %w", iid, err)
 	}

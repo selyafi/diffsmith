@@ -606,6 +606,92 @@ func TestListEnrichesFromDiscussions(t *testing.T) {
 	}
 }
 
+// TestList_PerMRDiscussionFailure verifies that when one MR's discussions call
+// fails, that row is marked Enriched=false with its base fields (Number,
+// Author, CommentCount) intact, while the other MR still enriches successfully.
+// List must return nil error. A bespoke runner is used (instead of
+// scriptedRunner) because the two discussions calls run concurrently and cannot
+// be matched by position.
+func TestList_PerMRDiscussionFailure(t *testing.T) {
+	// Two MRs: iid 10 (discussions will fail) and iid 20 (discussions succeed).
+	mrListJSON := []byte(`[
+		{"iid":10,"title":"MR ten","author":{"username":"alice"},"updated_at":"2026-06-01T00:00:00Z","web_url":"https://gitlab.com/o/r/-/merge_requests/10","draft":false,"user_notes_count":2},
+		{"iid":20,"title":"MR twenty","author":{"username":"bob"},"updated_at":"2026-06-01T00:00:00Z","web_url":"https://gitlab.com/o/r/-/merge_requests/20","draft":false,"user_notes_count":0}
+	]`)
+
+	discussionsIID20 := []byte(`[
+		{"notes":[{"system":false,"resolvable":true,"resolved":true,"author":{"username":"carol"}}]}
+	]`)
+
+	run := func(_ context.Context, _ io.Reader, name string, args ...string) ([]byte, error) {
+		// mr list call
+		for i, a := range args {
+			if a == "list" && i > 0 && args[i-1] == "mr" {
+				return mrListJSON, nil
+			}
+		}
+		// discussions calls: match by API path
+		for _, a := range args {
+			if strings.Contains(a, "/merge_requests/10/discussions") {
+				return nil, errors.New("simulated discussions failure for MR 10")
+			}
+			if strings.Contains(a, "/merge_requests/20/discussions") {
+				return discussionsIID20, nil
+			}
+		}
+		t.Errorf("unexpected call: %s %v", name, args)
+		return nil, errors.New("unexpected call")
+	}
+
+	a := New(provider.Runner(run))
+	got, err := a.List(context.Background(), provider.RepoCoord{Host: "gitlab.com", Owner: "o", Name: "r"})
+	if err != nil {
+		t.Fatalf("List must return nil error even when one discussions call fails; got: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(got))
+	}
+
+	// Find rows by Number (concurrent goroutines may write in any order).
+	var row10, row20 *provider.PRSummary
+	for i := range got {
+		switch got[i].Number {
+		case 10:
+			row10 = &got[i]
+		case 20:
+			row20 = &got[i]
+		}
+	}
+	if row10 == nil || row20 == nil {
+		t.Fatalf("could not find both rows by Number; got %+v", got)
+	}
+
+	// iid 10: enrichment failed — Enriched=false, but base fields intact.
+	if row10.Enriched {
+		t.Errorf("iid 10: Enriched should be false after discussions failure")
+	}
+	if row10.Number != 10 {
+		t.Errorf("iid 10: Number = %d, want 10", row10.Number)
+	}
+	if row10.Author != "alice" {
+		t.Errorf("iid 10: Author = %q, want alice", row10.Author)
+	}
+	if row10.CommentCount != 2 {
+		t.Errorf("iid 10: CommentCount = %d, want 2", row10.CommentCount)
+	}
+
+	// iid 20: enrichment succeeded.
+	if !row20.Enriched {
+		t.Errorf("iid 20: Enriched should be true")
+	}
+	if row20.ResolvedThreads != 1 || row20.UnresolvedThreads != 0 {
+		t.Errorf("iid 20: threads = ✔%d/✖%d, want ✔1/✖0", row20.ResolvedThreads, row20.UnresolvedThreads)
+	}
+	if len(row20.HumanCommenters) != 1 || row20.HumanCommenters[0] != "carol" {
+		t.Errorf("iid 20: HumanCommenters = %v, want [carol]", row20.HumanCommenters)
+	}
+}
+
 // Confirm we no longer pass the deprecated --opened flag.
 func TestAdapter_List_OmitsDeprecatedOpenedFlag(t *testing.T) {
 	run, calls := scriptedRunner(t, []scriptResult{{out: []byte(`[]`)}})
