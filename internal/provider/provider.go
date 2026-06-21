@@ -44,7 +44,14 @@ type PRSummary struct {
 	Number    int
 	Title     string
 	Author    string
-	URL       string      // canonical, ready to hand to runReview
+	URL       string // canonical, ready to hand to runReview
 	UpdatedAt time.Time
 	Draft     bool
+
+	// Enrichment (display-only; populated by List, zero when not enriched).
+	CommentCount      int      // conversation + inline comments, incl. bots
+	ResolvedThreads   int      // ✔ review threads / resolvable discussions
+	UnresolvedThreads int      // ✖
+	HumanCommenters   []string // bot-filtered, deduped, excludes the PR author
+	Enriched          bool     // false if enrichment failed for this row
 }
