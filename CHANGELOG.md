@@ -4,6 +4,20 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.4.0 — 2026-06-22
+
+### Added
+
+- The inbox now shows review-discussion signal at a glance for every PR/MR
+  row: **comment count**, **human commenters** (bots filtered out), and
+  **resolved vs unresolved** review-thread counts — across both GitHub PRs
+  and GitLab MRs. GitHub fetches it in a single GraphQL call; GitLab adds
+  bounded-concurrent per-MR discussion lookups. Unresolved counts are
+  highlighted, and a row whose enrichment can't be fetched renders `?`
+  rather than a misleading `0`. Pin `--hostname` is honored so self-hosted
+  GitLab works. (Known limit: counts cap at 100 threads/discussions per
+  row; full pagination is a tracked follow-up.)
+
 ## v0.3.2 — 2026-06-20
 
 ### Changed
