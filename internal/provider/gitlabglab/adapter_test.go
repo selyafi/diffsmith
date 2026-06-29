@@ -541,6 +541,33 @@ func TestAdapter_List_Success(t *testing.T) {
 	}
 }
 
+// TestAdapter_List_SelfHostedRepoURL verifies that for a self-hosted Host the
+// mr-list call targets the instance via a full --repo URL (the mechanism
+// `glab mr list` actually supports) and never passes --hostname, which that
+// subcommand rejects with "Unknown flag: --hostname". Regression guard for the
+// glab 1.99 inbox breakage. diffsmith-1bk.
+func TestAdapter_List_SelfHostedRepoURL(t *testing.T) {
+	canned := []byte(`[{"iid":7,"title":"t","author":{"username":"u"},"updated_at":"2026-06-18T00:00:00Z","web_url":"https://gitlab.example.com/o/r/-/merge_requests/7","draft":false,"user_notes_count":0}]`)
+	run, calls := scriptedRunner(t, []scriptResult{{out: canned}, {out: []byte(`[]`)}})
+	a := New(run)
+
+	_, err := a.List(context.Background(), provider.RepoCoord{Host: "gitlab.example.com", Owner: "o", Name: "r"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	listArgs := (*calls)[0].args
+	for i, arg := range listArgs {
+		if arg == "--hostname" {
+			t.Fatalf("mr list must not carry --hostname (glab rejects it); got args %v", listArgs)
+		}
+		if arg == "--repo" {
+			if i+1 >= len(listArgs) || listArgs[i+1] != "https://gitlab.example.com/o/r" {
+				t.Errorf("mr list --repo must be full self-hosted URL; got %v", listArgs)
+			}
+		}
+	}
+}
+
 func TestAdapter_List_Empty(t *testing.T) {
 	run, _ := scriptedRunner(t, []scriptResult{{out: []byte(`[]`)}})
 	a := New(run)

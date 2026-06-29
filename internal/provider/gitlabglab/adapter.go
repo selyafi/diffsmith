@@ -246,17 +246,20 @@ type glabMR struct {
 // per-MR discussions fetch failure marks that row Enriched=false with
 // base fields intact; all other rows continue to be enriched.
 func (a *Adapter) List(ctx context.Context, repo provider.RepoCoord) ([]provider.PRSummary, error) {
+	// Pin the host so self-hosted GitLab instances don't fall through to
+	// glab's default host. `glab mr list` has no --hostname flag (unlike
+	// `glab api`); it accepts a full URL in --repo, so embed the host there,
+	// mirroring how Fetch's `mr diff`/`mr view` pass ref.RepoURL to -R.
+	// diffsmith-1bk.
+	repoArg := repo.Owner + "/" + repo.Name
+	if repo.Host != "" {
+		repoArg = "https://" + repo.Host + "/" + repo.Owner + "/" + repo.Name
+	}
 	args := []string{
 		"mr", "list",
-		"--repo", repo.Owner + "/" + repo.Name,
+		"--repo", repoArg,
 		"--output", "json",
 		"--per-page", "30",
-	}
-	// Pin the host so self-hosted GitLab instances don't fall through to
-	// glab's default host. Mirrors the --hostname guard in enrichMR and
-	// FetchLinkedIssues. diffsmith-1bk.
-	if repo.Host != "" {
-		args = append(args, "--hostname", repo.Host)
 	}
 	out, err := a.run(ctx, nil, "glab", args...)
 	if err != nil {

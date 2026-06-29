@@ -4,6 +4,17 @@ All notable changes to Diffsmith are documented here. Format follows
 `docs/dev-plan/release-plan.md` § Release Notes Shape; versioning is
 Semantic Versioning per the same doc.
 
+## v0.4.1 — 2026-06-29
+
+### Fixed
+
+- The inbox no longer breaks on GitLab. v0.4.0 pinned the host on
+  `glab mr list` with `--hostname`, but that subcommand has no such flag
+  (only `glab api` does), so every inbox fetch failed with
+  `Unknown flag: --hostname`. The host is now pinned via a full URL in
+  `--repo` — the mechanism `glab mr list` actually supports — mirroring how
+  `mr diff`/`mr view` already target self-hosted instances. (diffsmith-1bk)
+
 ## v0.4.0 — 2026-06-22
 
 ### Added
